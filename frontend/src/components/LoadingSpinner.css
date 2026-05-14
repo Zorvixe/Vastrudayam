@@ -1,0 +1,25 @@
+/* LoadingSpinner.css */
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 60vh;
+}
+
+.spinner {
+  width: 3rem;    /* 48px = w-12 */
+  height: 3rem;   /* 48px = h-12 */
+  border-width: 4px;
+  border-style: solid;
+  border-color: #e5e7eb;  /* gray-200 */
+  border-top-color: #3b82f6; /* blue-600 */
+  border-radius: 9999px;  /* rounded-full */
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
