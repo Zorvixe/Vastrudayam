@@ -31,27 +31,41 @@ const Orders = () => {
 
   const token = localStorage.getItem("token");
 
-  // ================= FETCH ORDERS =================
-  const fetchOrders = async () => {
+  // ================= FETCH ORDERS (WITH SILENT MODE FOR AUTO-SYNC) =================
+  const fetchOrders = async (isSilent = false) => {
     try {
-      setInitialLoading(true);
+      if (!isSilent) setInitialLoading(true);
       const res = await axios.get(`${API_URL}/admin/orders`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
       });
       setOrders(res.data.orders || []);
+      
+      // If a modal is open, silently update its data too so the modal shows the live status
+      if (isSilent && selectedOrder) {
+        const updatedSelectedOrder = res.data.orders.find(o => o.id === selectedOrder.id);
+        if (updatedSelectedOrder) setSelectedOrder(updatedSelectedOrder);
+      }
     } catch (err) {
       console.error("Fetch orders error:", err);
-      toast.error("Failed to load orders");
+      if (!isSilent) toast.error("Failed to load orders");
     } finally {
-      setInitialLoading(false);
+      if (!isSilent) setInitialLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchOrders();
-  }, []);
+    fetchOrders(); // Initial loud load with spinner
+
+    // 🚀 AUTO-SYNC: Silently fetch orders every 10 seconds to catch Shiprocket webhook updates
+    const interval = setInterval(() => {
+      fetchOrders(true); // 'true' means silent load (no spinner)
+    }, 10000);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, [filterDate]); // Re-bind if date filter changes
 
   // Filter orders based on date
   const filteredOrders = orders.filter(order => {
@@ -75,7 +89,7 @@ const Orders = () => {
         }
       );
       toast.success("Order status updated successfully");
-      fetchOrders();
+      fetchOrders(true); // Silent refresh
     } catch (err) {
       console.error("Status update error:", err);
       toast.error("Failed to update order status");
@@ -97,7 +111,7 @@ const Orders = () => {
       });
       if (res.data.success) {
         toast.success("Order successfully pushed to Shiprocket! 🚀");
-        fetchOrders();
+        fetchOrders(true);
         setConfirmPushOrderId(null);
       }
     } catch (err) {
@@ -119,7 +133,7 @@ const Orders = () => {
       });
       if (res.data.success) {
         toast.success("AWB Generated Successfully!");
-        fetchOrders();
+        fetchOrders(true);
       }
     } catch (err) {
       toast.error(err.response?.data?.message || "Failed to generate AWB");
@@ -359,13 +373,15 @@ const Orders = () => {
                     <select
                       value={order.order_status}
                       onChange={(e) => updateOrderStatus(order.id, e.target.value)}
-                      className={`status-dropdown-admin ${order.order_status.toLowerCase()}`}
+                      className={`status-dropdown-admin ${order.order_status.toLowerCase().replace(/\s+/g, '-')}`}
                       disabled={statusUpdatingId === order.id}
                     >
                       <option>Placed</option>
                       <option>Processing</option>
                       <option>Shipped</option>
+                      <option>Out for Delivery</option>
                       <option>Delivered</option>
+                      <option>Returned</option>
                       <option>Cancelled</option>
                     </select>
                     {statusUpdatingId === order.id && (

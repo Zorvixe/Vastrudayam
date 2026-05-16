@@ -403,7 +403,6 @@ const OrderDetails = () => {
                    </div>
                    <div className="order-product-info">
                       <h2>{item.name}</h2>
-                      <p className="op-seller">Seller: Vastrudayam</p>
                       <div className="op-price-row">
                           <span className="op-price">₹{item.price}</span>
                           <span style={{ fontSize: '12px', color: '#878787' }}>Qty: {item.quantity}</span>

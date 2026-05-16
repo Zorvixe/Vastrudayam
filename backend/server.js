@@ -1,7 +1,6 @@
-
-import express from 'express'
-import cors from 'cors'
-import 'dotenv/config'
+import express from 'express';
+import cors from 'cors';
+import 'dotenv/config';
 import { Pool } from "pg";
 import multer from "multer";
 import path from "path";
@@ -16,11 +15,6 @@ import sgMail from '@sendgrid/mail';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
-// Initialize Razorpay
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
 // ================= APP CONFIG =================
 const app = express();
 const server = http.createServer(app);
@@ -32,10 +26,23 @@ const io = new Server(server, {
 });
 
 // Setup SendGrid
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
+
+// Initialize Razorpay Safely
+let razorpay;
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+} else {
+  console.warn("⚠️ Razorpay keys missing. Payment endpoints might fail if accessed.");
+}
 
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
 // Admin Email Notification Helper
 const sendAdminNotification = async (order) => {
@@ -112,7 +119,7 @@ const validateImageFile = (file) => {
 // Helper: validate video files
 const validateVideoFile = (file) => {
   const allowedExt = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.wmv', '.flv', '.m4v'];
-  const allowedMime = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm', 'video/x-ms-wmv', 'video/x-flv', 'video/mp4'];
+  const allowedMime = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm', 'video/x-ms-wmv', 'video/x-flv'];
   const ext = path.extname(file.originalname).toLowerCase();
   if (!allowedExt.includes(ext)) throw new Error(`Invalid video extension. Allowed: ${allowedExt.join(', ')}`);
   if (!allowedMime.includes(file.mimetype)) throw new Error(`Invalid video MIME type. Allowed: ${allowedMime.join(', ')}`);
@@ -279,6 +286,7 @@ const verifyAdminVendorIndividualAccess = (req, res, next) => {
   return res.status(403).json({ message: "Admin or Vendor access required" });
 };
 
+// ================= DATABASE INIT =================
 const initDatabase = async () => {
   try {
     // 1. users
@@ -314,8 +322,6 @@ const initDatabase = async () => {
       ALTER COLUMN password DROP NOT NULL;
     `);
 
-
-    // Inside the ALTER TABLE users block, add:
     await pool.query(`
         ALTER TABLE users 
         ADD COLUMN IF NOT EXISTS pickup_address_line1 TEXT,
@@ -342,7 +348,6 @@ const initDatabase = async () => {
         );
       `);
 
-    // Migrate existing single pickup address (from users table) to new table
     await pool.query(`
         INSERT INTO vendor_pickup_addresses (vendor_id, location_name, address_line1, address_line2, city, state, pincode, is_default)
         SELECT id, pickup_location_name, pickup_address_line1, pickup_address_line2, pickup_city, pickup_state, pickup_pincode, true
@@ -696,8 +701,6 @@ const initDatabase = async () => {
           )
         `);
 
-
-    // Inside initDatabase() after other defaultSettings
     await pool.query(`
         INSERT INTO settings (key, value)
         VALUES ('platform_fee_percent', '10.00')
@@ -717,7 +720,7 @@ const initDatabase = async () => {
       `, [setting.key, setting.value]);
     }
 
-    // SILENT SEED: Ensure the specific admin from .env exists and has SUPER ADMIN privileges
+    // SILENT SEED
     const adminEmail = (process.env.ADMIN_EMAIL || "admin@example.com").toLowerCase().trim();
     const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD || "Admin@123";
 
@@ -934,9 +937,7 @@ app.delete("/api/user/address/:id", verifyToken, async (req, res) => {
   }
 });
 
-
 // ================= VENDOR PICKUP ADDRESS =================
-// Get vendor's pickup address
 app.get("/api/vendor/pickup-address", verifyToken, async (req, res) => {
   try {
     const user = await pool.query(
@@ -951,7 +952,6 @@ app.get("/api/vendor/pickup-address", verifyToken, async (req, res) => {
   }
 });
 
-// Update vendor's pickup address
 app.put("/api/vendor/pickup-address", verifyToken, async (req, res) => {
   try {
     const {
@@ -979,9 +979,6 @@ app.put("/api/vendor/pickup-address", verifyToken, async (req, res) => {
   }
 });
 
-
-// ================= VENDOR PICKUP ADDRESSES (MULTIPLE) =================
-// Get all pickup addresses for the logged-in vendor
 app.get("/api/vendor/pickup-addresses", verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
@@ -994,7 +991,6 @@ app.get("/api/vendor/pickup-addresses", verifyToken, async (req, res) => {
   }
 });
 
-// Create a new pickup address
 app.post("/api/vendor/pickup-addresses", verifyToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1026,14 +1022,12 @@ app.post("/api/vendor/pickup-addresses", verifyToken, async (req, res) => {
   }
 });
 
-// Update an existing pickup address
 app.put("/api/vendor/pickup-addresses/:id", verifyToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { location_name, address_line1, address_line2, city, state, pincode, is_default } = req.body;
 
-    // Verify ownership
     const check = await client.query(
       `SELECT id FROM vendor_pickup_addresses WHERE id = $1 AND vendor_id = $2`,
       [id, req.user.id]
@@ -1076,13 +1070,11 @@ app.put("/api/vendor/pickup-addresses/:id", verifyToken, async (req, res) => {
   }
 });
 
-// Delete a pickup address
 app.delete("/api/vendor/pickup-addresses/:id", verifyToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
 
-    // Verify ownership
     const check = await client.query(
       `SELECT id, is_default FROM vendor_pickup_addresses WHERE id = $1 AND vendor_id = $2`,
       [id, req.user.id]
@@ -1096,7 +1088,6 @@ app.delete("/api/vendor/pickup-addresses/:id", verifyToken, async (req, res) => 
     await client.query("BEGIN");
     await client.query(`DELETE FROM vendor_pickup_addresses WHERE id = $1`, [id]);
 
-    // If the deleted address was the default, set another address as default (oldest one)
     if (isDefault) {
       const newDefault = await client.query(
         `SELECT id FROM vendor_pickup_addresses WHERE vendor_id = $1 ORDER BY created_at ASC LIMIT 1`,
@@ -1120,13 +1111,11 @@ app.delete("/api/vendor/pickup-addresses/:id", verifyToken, async (req, res) => 
   }
 });
 
-// Set a specific address as default
 app.put("/api/vendor/pickup-addresses/:id/default", verifyToken, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
 
-    // Verify ownership
     const check = await client.query(
       `SELECT id FROM vendor_pickup_addresses WHERE id = $1 AND vendor_id = $2`,
       [id, req.user.id]
@@ -1160,7 +1149,7 @@ app.get("/api/admin/dashboard", verifyToken, verifyAnyAdmin, (req, res) => {
   res.json({ message: "Welcome Admin Dashboard" });
 });
 
-// ================= USER MANAGEMENT (SUPER ADMIN) =================
+// ================= USER MANAGEMENT =================
 app.get("/api/admin/users", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const users = await pool.query(`SELECT id,name,email,phone,role,status,created_at FROM users ORDER BY created_at DESC`);
@@ -1201,20 +1190,12 @@ app.post("/api/admin/users/create-admin", verifyToken, verifySuperAdmin, async (
   try {
     const { name, email, password, phone, store_name, role } = req.body;
 
-    if (!name || name.length < 3) {
-      return res.status(400).json({ success: false, message: "Name must be at least 3 characters" });
-    }
-    if (!email || !validator.isEmail(email)) {
-      return res.status(400).json({ success: false, message: "Valid email is required" });
-    }
-    if (!password || !validator.isStrongPassword(password, {
-      minLength: 8, minLowercase: 1, minUppercase: 1, minNumbers: 1, minSymbols: 1
-    })) {
+    if (!name || name.length < 3) return res.status(400).json({ success: false, message: "Name must be at least 3 characters" });
+    if (!email || !validator.isEmail(email)) return res.status(400).json({ success: false, message: "Valid email is required" });
+    if (!password || !validator.isStrongPassword(password, { minLength: 8, minLowercase: 1, minUppercase: 1, minNumbers: 1, minSymbols: 1 })) {
       return res.status(400).json({ success: false, message: "Password must be strong (min 8 chars, uppercase, lowercase, number, symbol)" });
     }
-    if (phone && !validator.isMobilePhone(phone, 'any')) {
-      return res.status(400).json({ success: false, message: "Invalid phone number" });
-    }
+    if (phone && !validator.isMobilePhone(phone, 'any')) return res.status(400).json({ success: false, message: "Invalid phone number" });
 
     let finalRole = 'vendor';
     if (role && ['admin', 'vendor', 'super_admin'].includes(role)) {
@@ -1223,13 +1204,8 @@ app.post("/api/admin/users/create-admin", verifyToken, verifySuperAdmin, async (
       finalRole = 'super_admin';
     }
 
-    const existing = await pool.query(
-      "SELECT * FROM users WHERE LOWER(email) = $1 OR phone = $2",
-      [email.toLowerCase(), phone]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(400).json({ success: false, message: "User with this email or phone already exists" });
-    }
+    const existing = await pool.query("SELECT * FROM users WHERE LOWER(email) = $1 OR phone = $2", [email.toLowerCase(), phone]);
+    if (existing.rows.length > 0) return res.status(400).json({ success: false, message: "User with this email or phone already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const [first_name, ...rest] = name.trim().split(" ");
@@ -1244,11 +1220,9 @@ app.post("/api/admin/users/create-admin", verifyToken, verifySuperAdmin, async (
 
     res.json({ success: true, message: "Account created successfully", user: result.rows[0] });
   } catch (error) {
-    console.error("Create admin error:", error);
     res.status(500).json({ success: false, message: "Failed to create account" });
   }
 });
-
 
 app.get("/api/admin/vendors", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
@@ -1260,11 +1234,9 @@ app.get("/api/admin/vendors", verifyToken, verifySuperAdmin, async (req, res) =>
     `);
     res.json({ success: true, users: users.rows });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ message: "Failed to fetch vendors" });
   }
 });
-
 
 app.get("/api/vendor/customers", verifyToken, verifyAnyAdmin, async (req, res) => {
   try {
@@ -1283,7 +1255,6 @@ app.get("/api/vendor/customers", verifyToken, verifyAnyAdmin, async (req, res) =
     `);
     res.json({ success: true, users: users.rows });
   } catch (err) {
-    console.error("Vendor customers error:", err);
     res.status(500).json({ message: "Failed to fetch customers" });
   }
 });
@@ -1329,7 +1300,6 @@ app.delete("/api/admin/reviews/:id", verifyToken, verifyAdminVendorIndividualAcc
     res.json({ success: true, message: "Review deleted successfully" });
   } catch (error) { res.status(500).json({ success: false, message: "Failed to delete review" }); }
 });
-
 
 // ================= CATEGORIES =================
 app.post("/api/admin/categories", verifyToken, verifyAdminVendorIndividualAccess, upload.single("image"), async (req, res) => {
@@ -1527,7 +1497,7 @@ app.delete("/api/admin/subcategories/:id", verifyToken, verifyAdminVendorIndivid
   }
 });
 
-// ================= CHECK SKU AVAILABILITY =================
+// ================= CHECK SKU & PRODUCT CODE =================
 app.get("/api/admin/products/check-sku", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
     const { sku, excludeId } = req.query;
@@ -1546,12 +1516,10 @@ app.get("/api/admin/products/check-sku", verifyToken, verifyAdminVendorIndividua
   }
 });
 
-// ================= SUGGEST UNIQUE SKU =================
 app.get("/api/admin/products/suggest-sku", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
     let { base = "SKU" } = req.query;
     if (!base || base.trim() === "") base = "SKU";
-    // Clean base: uppercase, only A-Z, max 6 chars
     base = base.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6);
     if (base.length < 2) base = "SKU";
 
@@ -1570,12 +1538,10 @@ app.get("/api/admin/products/suggest-sku", verifyToken, verifyAdminVendorIndivid
     }
     res.json({ success: true, suggestedSku: candidate });
   } catch (err) {
-    console.error("SKU suggestion error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ================= CHECK PRODUCT CODE AVAILABILITY =================
 app.get("/api/admin/products/check-product-code", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
     const { code, excludeId } = req.query;
@@ -1591,28 +1557,6 @@ app.get("/api/admin/products/check-product-code", verifyToken, verifyAdminVendor
     res.json({ success: true, exists: existing.rows.length > 0 });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-app.get("/api/admin/products/next-available-code", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
-  try {
-    let basePattern = "VAS-";
-    let counter = 1;
-    let found = false;
-    let candidate = "";
-
-    while (!found) {
-      candidate = `${basePattern}${counter.toString().padStart(3, '0')}`;
-      const existing = await pool.query("SELECT id FROM products WHERE product_code = $1", [candidate]);
-      if (existing.rows.length === 0) {
-        found = true;
-      } else {
-        counter++;
-      }
-    }
-    res.json({ success: true, nextId: candidate });
-  } catch (err) {
-    res.json({ success: true, nextId: "VAS-001" });
   }
 });
 
@@ -1665,7 +1609,6 @@ app.post(
     }
   }
 );
-
 
 app.get("/api/products", async (req, res) => {
   try {
@@ -1736,7 +1679,7 @@ app.get("/api/admin/products", verifyToken, verifyAdminVendorIndividualAccess, a
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
-    const { search, filter } = req.query;
+    const { search } = req.query;
 
     let query = `SELECT p.*, c.name AS category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE 1=1`;
     let countQuery = `SELECT COUNT(*) FROM products p WHERE 1=1`;
@@ -1844,13 +1787,9 @@ app.delete("/api/admin/products/:id", verifyToken, verifyAdminVendorIndividualAc
     if (userRole !== 'super_admin' && existing.rows[0]?.vendor_id !== req.user.id) {
       return res.status(403).json({ success: false, message: "Unauthorized" });
     }
-
-    // Attempt hard delete
     await pool.query("DELETE FROM products WHERE id=$1", [req.params.id]);
     res.json({ success: true, message: "Product permanently deleted", action: "deleted" });
-
   } catch (error) {
-    // Foreign key violation: product has orders or other dependencies
     if (error.code === '23503') {
       await pool.query("UPDATE products SET is_active = false WHERE id = $1", [req.params.id]);
       return res.json({
@@ -1893,7 +1832,6 @@ app.patch("/api/admin/products/:id/stock", verifyToken, verifyAdminVendorIndivid
     res.status(500).json({ error: "Stock update failed" });
   }
 });
-
 
 app.post("/api/admin/system/reset", verifyToken, verifySuperAdmin, async (req, res) => {
   const client = await pool.connect();
@@ -2103,7 +2041,6 @@ app.get("/api/admin/orders", verifyToken, verifyAdminVendorIndividualAccess, asy
     let result;
 
     if (userRole === 'super_admin') {
-      // Super Admin: fetch all orders with full items
       result = await pool.query(`
         SELECT o.*, 
           COALESCE(
@@ -2117,8 +2054,6 @@ app.get("/api/admin/orders", verifyToken, verifyAdminVendorIndividualAccess, asy
         ORDER BY o.created_at DESC
       `);
     } else {
-      // Vendor or Admin: fetch only orders that contain at least one of their products
-      // Using a subquery to avoid duplicate rows and incorrect aggregation
       result = await pool.query(`
         SELECT o.*, 
           COALESCE(
@@ -2138,7 +2073,6 @@ app.get("/api/admin/orders", verifyToken, verifyAdminVendorIndividualAccess, asy
       `, [req.user.id]);
     }
 
-    // Ensure items is always an array (even if null)
     const orders = result.rows.map(order => ({
       ...order,
       items: order.items || []
@@ -2274,6 +2208,7 @@ app.get("/api/orders/:id", verifyToken, async (req, res) => {
 // ================= RAZORPAY ROUTES =================
 app.post("/api/razorpay/order", verifyToken, async (req, res) => {
   try {
+    if (!razorpay) return res.status(500).json({ success: false, message: "Razorpay is not configured on the server" });
     const { amount } = req.body;
     const order = await razorpay.orders.create({ amount: Math.round(amount * 100), currency: "INR", receipt: `receipt_${Date.now()}`, payment_capture: 1 });
     res.json({ success: true, order: { id: order.id, amount: order.amount, currency: order.currency } });
@@ -2324,7 +2259,6 @@ app.post("/api/razorpay/verify", verifyToken, async (req, res) => {
     client.release();
   }
 });
-
 
 // ================= PAYOUTS ROUTES =================
 app.get("/api/admin/payouts", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
@@ -2385,7 +2319,6 @@ app.put("/api/admin/payouts/:id/approve", verifyToken, verifySuperAdmin, async (
   }
 });
 
-// ================= PAYOUTS SUMMARY (SUPER ADMIN) =================
 app.get("/api/admin/payouts/summary", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const summary = await pool.query(`
@@ -2401,7 +2334,6 @@ app.get("/api/admin/payouts/summary", verifyToken, verifySuperAdmin, async (req,
   }
 });
 
-// ================= PAYOUTS SUMMARY PER VENDOR =================
 app.get("/api/admin/payouts/vendor-summary/:vendorId", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const vendorId = req.params.vendorId;
@@ -2419,7 +2351,6 @@ app.get("/api/admin/payouts/vendor-summary/:vendorId", verifyToken, verifySuperA
   }
 });
 
-// ================= GET ALL VENDOR BALANCES (SUPER ADMIN) =================
 app.get("/api/admin/vendor-balances", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -2510,7 +2441,7 @@ app.get("/api/coupons", async (req, res) => {
 
 app.post("/api/coupons/apply", verifyToken, async (req, res) => {
   try {
-    const { code, totalAmount, cartItems } = req.body;  // cartItems must include vendor_id
+    const { code, totalAmount, cartItems } = req.body;
 
     const result = await pool.query("SELECT * FROM coupons WHERE code ILIKE $1 AND is_active=true", [code]);
     if (result.rows.length === 0) return res.status(400).json({ message: "Invalid coupon" });
@@ -2523,7 +2454,6 @@ app.post("/api/coupons/apply", verifyToken, async (req, res) => {
 
     let applicableSubtotal = totalAmount;
 
-    // Vendor‑specific coupon: sum only that vendor's products
     if (coupon.vendor_id) {
       if (!cartItems || cartItems.length === 0)
         return res.status(400).json({ message: "Cart is empty" });
@@ -2561,7 +2491,6 @@ app.post("/api/coupons/apply", verifyToken, async (req, res) => {
       coupon
     });
   } catch (error) {
-    console.error("Coupon apply error:", error);
     res.status(500).json({ message: "Coupon apply failed" });
   }
 });
@@ -2592,8 +2521,7 @@ app.post("/api/coupons/auto-apply", verifyToken, async (req, res) => {
   }
 });
 
-
-//Add Review (User)
+// ================= REVIEWS (User) =================
 app.post("/api/reviews", verifyToken, upload.array("images", 5), async (req, res) => {
   try {
     const { product_id, rating, comment } = req.body;
@@ -2624,7 +2552,7 @@ app.post("/api/reviews", verifyToken, upload.array("images", 5), async (req, res
     res.status(500).json({ message: error.message || "Review failed" });
   }
 });
-//Get Reviews for Product
+
 app.get("/api/reviews/:productId", async (req, res) => {
   try {
     const { productId } = req.params;
@@ -2709,8 +2637,7 @@ app.put("/api/reviews/:id", verifyToken, async (req, res) => {
   }
 });
 
-
-// ADD/UPDATE BANNER (Admin or Super Admin)
+// ================= BANNERS =================
 app.post("/api/admin/banner", verifyToken, verifyAdminVendorIndividualAccess, uploadBannerMedia.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
   const uploadedFiles = [];
   try {
@@ -2743,8 +2670,7 @@ app.post("/api/admin/banner", verifyToken, verifyAdminVendorIndividualAccess, up
     for (const filePath of uploadedFiles) { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); }
     res.status(500).json({ message: err.message || "Banner upload failed" });
   }
-}
-);
+});
 
 app.put("/api/admin/banner/:id", verifyToken, verifyAdminVendorIndividualAccess, uploadBannerMedia.fields([{ name: 'image', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
   try {
@@ -2783,8 +2709,7 @@ app.put("/api/admin/banner/:id", verifyToken, verifyAdminVendorIndividualAccess,
   } catch (err) {
     res.status(500).json({ message: "Banner update failed" });
   }
-}
-);
+});
 
 app.get("/api/banners", async (req, res) => {
   try {
@@ -2837,7 +2762,7 @@ app.put("/api/admin/banners/reorder", verifyToken, verifyAdminOrSuperAdmin, asyn
   }
 });
 
-//ADD TO CART
+// ================= CART =================
 app.post("/api/cart", verifyToken, async (req, res) => {
   try {
     const { product_id, quantity } = req.body;
@@ -2874,7 +2799,7 @@ app.delete("/api/cart/:id", verifyToken, async (req, res) => {
   res.json({ success: true });
 });
 
-//add wishlist
+// ================= WISHLIST =================
 app.post("/api/wishlist", verifyToken, async (req, res) => {
   try {
     const { product_id } = req.body;
@@ -2923,8 +2848,7 @@ app.post("/api/user/orders/:id/return", verifyToken, uploadReturnVideo.single("v
     if (uploadedFilePath && fs.existsSync(uploadedFilePath)) fs.unlinkSync(uploadedFilePath);
     res.status(500).json({ success: false, message: error.message || "Failed to submit return request" });
   }
-}
-);
+});
 
 app.get("/api/user/returns", verifyToken, async (req, res) => {
   try {
@@ -3042,7 +2966,7 @@ app.put("/api/admin/returns/:id/status", verifyToken, verifyAdminVendorIndividua
   }
 });
 
-// Admin Reports & Analytics
+// ================= ANALYTICS / REPORTS =================
 app.get("/api/admin/reports", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 7;
@@ -3171,7 +3095,7 @@ app.delete("/api/admin/menu-items/:id", verifyToken, verifySuperAdmin, async (re
 
 app.get("/api/admin/dashboard/stats", verifyToken, verifyAnyAdmin, async (req, res) => {
   try {
-    const isVendor = req.user.role === 'vendor' || req.user.role === 'admin'; // Apply isolation based on individual access
+    const isVendor = req.user.role === 'vendor' || req.user.role === 'admin'; 
     const vId = req.user.id;
 
     const prodQuery = isVendor ? "SELECT COUNT(*) FROM products WHERE vendor_id = $1" : "SELECT COUNT(*) FROM products";
@@ -3228,7 +3152,6 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
   try {
     const orderId = req.params.id;
 
-    // --- Permission check: vendor can push only orders containing their products ---
     if (req.user.role !== 'super_admin') {
       const orderCheck = await pool.query(
         `SELECT DISTINCT o.id FROM orders o
@@ -3241,7 +3164,6 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
       }
     }
 
-    // --- Fetch order details ---
     const orderRes = await pool.query(`SELECT * FROM orders WHERE id = $1`, [orderId]);
     if (orderRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -3252,7 +3174,6 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
       return res.status(400).json({ success: false, message: "Order already pushed to Shiprocket" });
     }
 
-    // --- Get the vendor ID (pickup address owner) from the first order item ---
     const vendorIdResult = await pool.query(
       `SELECT vendor_id FROM order_items WHERE order_id = $1 LIMIT 1`,
       [orderId]
@@ -3262,12 +3183,11 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
     }
     const vendorId = vendorIdResult.rows[0].vendor_id;
 
-    // --- Fetch vendor's pickup address (custom columns added to users table) ---
     const pickupRes = await pool.query(
       `SELECT location_name, address_line1, address_line2, city, state, pincode 
-   FROM vendor_pickup_addresses 
-   WHERE vendor_id = $1 AND is_default = true 
-   LIMIT 1`,
+       FROM vendor_pickup_addresses 
+       WHERE vendor_id = $1 AND is_default = true 
+       LIMIT 1`,
       [vendorId]
     );
     if (pickupRes.rows.length === 0) {
@@ -3278,7 +3198,6 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
     }
     const pickup = pickupRes.rows[0];
 
-    // --- Fetch order items with product dimensions (for weight & size) ---
     const itemsRes = await pool.query(
       `SELECT oi.*, p.name, p.sku, p.weight, p.length, p.width, p.height
        FROM order_items oi
@@ -3301,18 +3220,15 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
     const maxWid = Math.max(...itemsRes.rows.map(i => parseFloat(i.width || 10)));
     const maxHei = itemsRes.rows.reduce((sum, item) => sum + (parseFloat(item.height || 5) * item.quantity), 0);
 
-    // --- Authenticate with Shiprocket ---
     const token = await authenticateShiprocket();
 
-    // --- Extract customer pincode from order address ---
     const pinMatch = order.address.match(/\b\d{6}\b/);
     const customerPincode = pinMatch ? pinMatch[0] : "500001";
 
-    // --- Construct payload using VENDOR’s pickup details (not env vars) ---
     const payload = {
       order_id: `VASTRUDAYAM-${order.id}`,
       order_date: new Date(order.created_at).toISOString().split('T')[0] + " 10:00",
-      pickup_location: vendor.pickup_location_name,          // from vendor settings
+      pickup_location: pickup.location_name,
       billing_customer_name: order.customer_name || "Customer",
       billing_last_name: "VA",
       billing_address: order.house_no && order.street_area ? `${order.house_no}, ${order.street_area}` : order.address,
@@ -3333,7 +3249,6 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
       weight: pkgWeight
     };
 
-    // --- Call Shiprocket API to create order ---
     const fetchRes = await fetch("https://apiv2.shiprocket.in/v1/external/orders/create/adhoc", {
       method: "POST",
       headers: {
@@ -3346,13 +3261,11 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
     const result = await fetchRes.json();
 
     if (fetchRes.ok && result.order_id) {
-      // Save Shiprocket references in the database
       await pool.query(
         `UPDATE orders SET shiprocket_order_id = $1, shiprocket_shipment_id = $2 WHERE id = $3`,
         [result.order_id, result.shipment_id, orderId]
       );
 
-      // --- Optional: automatically assign AWB after order creation ---
       try {
         const shipmentId = result.shipment_id;
         const awbRes = await fetch("https://apiv2.shiprocket.in/v1/external/courier/assign/awb", {
@@ -3371,7 +3284,6 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
           }
         }
       } catch (awbErr) {
-        // Non‑critical – AWB can be generated later manually
         console.warn("Auto AWB assignment failed:", awbErr.message);
       }
 
@@ -3539,7 +3451,6 @@ app.post("/api/razorpay/webhook", express.raw({ type: 'application/json' }), asy
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     const signature = req.headers['x-razorpay-signature'];
-    const crypto = await import('crypto');
     const expectedSignature = crypto.createHmac('sha256', webhookSecret).update(JSON.stringify(req.body)).digest('hex');
 
     if (signature !== expectedSignature) return res.status(400).json({ success: false, message: 'Invalid webhook signature' });
@@ -3559,7 +3470,6 @@ app.post("/api/razorpay/webhook", express.raw({ type: 'application/json' }), asy
   }
 });
 
-// Get all admin users (role = 'admin')
 app.get("/api/admin/admins", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -3573,7 +3483,8 @@ app.get("/api/admin/admins", verifyToken, verifySuperAdmin, async (req, res) => 
     console.error(err);
     res.status(500).json({ message: "Failed to fetch admins" });
   }
-});// Get all customers (role = 'user') with order stats
+});
+
 app.get("/api/admin/customers", verifyToken, verifyAdminOrSuperAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -3594,7 +3505,8 @@ app.get("/api/admin/customers", verifyToken, verifyAdminOrSuperAdmin, async (req
     console.error(err);
     res.status(500).json({ message: "Failed to fetch customers" });
   }
-});// Delete an admin or vendor (Super Admin only)
+});
+
 app.delete("/api/admin/admins/:id", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const userId = req.params.id;
@@ -3635,6 +3547,52 @@ app.get("/api/products/search", async (req, res) => {
   }
 });
 
+// ================= SETTINGS ROUTES =================
+app.get("/api/settings", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM settings");
+    const settings = {};
+    result.rows.forEach(row => { settings[row.key] = row.value; });
+    res.json({ success: true, settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/settings", verifyToken, verifySuperAdmin, async (req, res) => {
+  try {
+    const { settings } = req.body;
+    for (const key in settings) {
+      await pool.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP", [key, settings[key].toString()]);
+    }
+    res.json({ success: true, message: "Settings updated successfully" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/settings/platform-fee", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT value FROM settings WHERE key = 'platform_fee_percent'");
+    const fee = result.rows[0] ? parseFloat(result.rows[0].value) : 10.00;
+    res.json({ success: true, platform_fee_percent: fee });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put("/api/admin/settings/platform-fee", verifyToken, verifySuperAdmin, async (req, res) => {
+  try {
+    const { platform_fee_percent } = req.body;
+    if (platform_fee_percent === undefined || isNaN(platform_fee_percent) || platform_fee_percent < 0 || platform_fee_percent > 100) {
+      return res.status(400).json({ success: false, message: "Invalid fee percentage (0-100)" });
+    }
+    await pool.query(
+      "UPDATE settings SET value = $1, updated_at = NOW() WHERE key = 'platform_fee_percent'",
+      [platform_fee_percent.toString()]
+    );
+    res.json({ success: true, message: "Platform fee updated successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.get("/", (req, res) => res.send("Vastrudayam API is running 🚀"));
 
 app.use((err, req, res, next) => {
@@ -3647,54 +3605,5 @@ app.use((err, req, res, next) => {
 
 // ================= START SERVER =================
 initDatabase().then(() => {
-  app.get("/api/settings", async (req, res) => {
-    try {
-      const result = await pool.query("SELECT * FROM settings");
-      const settings = {};
-      result.rows.forEach(row => { settings[row.key] = row.value; });
-      res.json({ success: true, settings });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
-
-  app.put("/api/settings", verifyToken, verifySuperAdmin, async (req, res) => {
-    try {
-      const { settings } = req.body;
-      for (const key in settings) {
-        await pool.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP", [key, settings[key].toString()]);
-      }
-      res.json({ success: true, message: "Settings updated successfully" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
-
-        // Get platform fee (public – needed for product forms)
-      app.get("/api/settings/platform-fee", async (req, res) => {
-        try {
-          const result = await pool.query(
-            "SELECT value FROM settings WHERE key = 'platform_fee_percent'"
-          );
-          const fee = result.rows[0] ? parseFloat(result.rows[0].value) : 10.00;
-          res.json({ success: true, platform_fee_percent: fee });
-        } catch (err) {
-          res.status(500).json({ success: false, message: err.message });
-        }
-      });
-
-      // Update platform fee (super admin only)
-      app.put("/api/admin/settings/platform-fee", verifyToken, verifySuperAdmin, async (req, res) => {
-        try {
-          const { platform_fee_percent } = req.body;
-          if (platform_fee_percent === undefined || isNaN(platform_fee_percent) || platform_fee_percent < 0 || platform_fee_percent > 100) {
-            return res.status(400).json({ success: false, message: "Invalid fee percentage (0-100)" });
-          }
-          await pool.query(
-            "UPDATE settings SET value = $1, updated_at = NOW() WHERE key = 'platform_fee_percent'",
-            [platform_fee_percent.toString()]
-          );
-          res.json({ success: true, message: "Platform fee updated successfully" });
-        } catch (err) {
-          res.status(500).json({ success: false, message: err.message });
-        }
-      });
-
   server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 });
