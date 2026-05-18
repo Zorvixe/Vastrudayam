@@ -18,7 +18,7 @@ const createSlug = (name) => {
     .replace(/^-|-$/g, "");
 };
 
-// Reusable Notify Modal (same as in ProductDetails)
+// Reusable Notify Modal
 const StockNotificationModal = ({
   product, showNotifyModal, setShowNotifyModal,
   handleNotifySubmit, notifyInfo, setNotifyInfo,
@@ -108,7 +108,7 @@ const ProductCard = ({
   const navigate = useNavigate();
   const { addToCart } = useCart();
   const { toggleWishlist, isInWishlist } = useWishlist();
-  const { setShowLogin, user } = useUser();  // <-- get user from context
+  const { setShowLogin, user } = useUser();
   const token = localStorage.getItem("token");
 
   const [hasRequestedNotification, setHasRequestedNotification] = useState(false);
@@ -198,7 +198,6 @@ const ProductCard = ({
   const [submitting, setSubmitting] = useState(false);
   const [isNotifySuccess, setIsNotifySuccess] = useState(false);
 
-  // Helper to get user's display name from user context
   const getUserDisplayName = () => {
     if (!user) return "";
     if (user.name) return user.name;
@@ -211,7 +210,6 @@ const ProductCard = ({
     return user.phone || user.mobile || "";
   };
 
-  // Auto-fill notifyInfo when modal opens
   useEffect(() => {
     if (showNotifyModal && token && user) {
       setNotifyInfo({
@@ -219,7 +217,6 @@ const ProductCard = ({
         phone: getUserPhone()
       });
     } else if (showNotifyModal && token && !user) {
-      // fallback to localStorage if user context not yet loaded
       const storedUser = localStorage.getItem("user") ? JSON.parse(localStorage.getItem("user")) : null;
       if (storedUser) {
         setNotifyInfo({
@@ -229,13 +226,9 @@ const ProductCard = ({
       } else {
         setNotifyInfo({ name: "", phone: "" });
       }
-    } else {
-      // Not showing modal – optional reset
-      // We don't reset to avoid flashing, but values will be overwritten next time
     }
   }, [showNotifyModal, token, user]);
 
-  // Also update if user changes while modal is open (e.g., after login)
   useEffect(() => {
     if (token && user && showNotifyModal) {
       setNotifyInfo({
@@ -266,8 +259,7 @@ const ProductCard = ({
       });
       if (res.data.success) {
         setIsNotifySuccess(true);
-        setHasRequestedNotification(true)
-        // Automatically close modal after 4 seconds
+        setHasRequestedNotification(true);
         setTimeout(() => {
           setShowNotifyModal(false);
           setIsNotifySuccess(false);
@@ -368,7 +360,7 @@ const ProductCard = ({
                 <div className="out-of-stock-status">
                   <div className="status-header">
                     <span className="status-icon"><i className="bi bi-info-circle-fill"></i></span>
-                    <span className="status-label">Currently Out of Stock</span>
+                    <span className="status-label">Out of Stock</span>
                   </div>
                   <div className="status-bar empty"></div>
                 </div>
@@ -377,10 +369,6 @@ const ProductCard = ({
               )}
             </div>
           )}
-
-          <div className="p-card-footer">
-            <small className="p-tax">Taxes included</small>
-          </div>
         </div>
 
         {/* ADD TO CART ACTION */}
@@ -389,7 +377,7 @@ const ProductCard = ({
             {stockInfo.qty === 0 ? (
               hasRequestedNotification ? (
                 <button className="notify-me-btn requested" disabled>
-                  <i className="bi bi-check-circle"></i> Already Requested
+                  <i className="bi bi-check-circle"></i> Requested
                 </button>
               ) : (
                 <button
@@ -399,10 +387,9 @@ const ProductCard = ({
                     setShowNotifyModal(true);
                   }}
                 >
-                  <i className="bi bi-bell"></i> I want this
+                  <i className="bi bi-bell"></i> Notify Me
                 </button>
               )
-
             ) : (
               <button
                 className={`add-to-cart-action`}

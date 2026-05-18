@@ -9,7 +9,7 @@
   background: linear-gradient(rgba(106, 20, 33, 0.7), rgba(106, 20, 33, 0.7)), url('https://images.unsplash.com/photo-1610030469668-93530c1761cf?auto=format&fit=crop&q=80&w=1600');
   background-size: cover;
   background-position: center;
-  height: 450px;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;

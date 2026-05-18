@@ -12,6 +12,8 @@
   transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
+
+
 .nav-hidden {
   transform: translateY(-100%);
 }
@@ -150,7 +152,7 @@
 }
 
 .logo-box img {
-  height: 55px; /* Maintains smaller structural height */
+  height: 40px; /* Maintains smaller structural height */
   cursor: pointer;
   object-fit: contain;
   transform: scale(1.6); /* Visually expands massively without pushing other elements down */
@@ -519,7 +521,7 @@
     padding: 15px 20px;
   }
    .logo-box img {
-    height: 55px;
+    height: 25px;
     transform: scale(1.6);
   }
   

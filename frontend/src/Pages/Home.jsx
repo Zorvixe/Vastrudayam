@@ -433,13 +433,13 @@ const Home = () => {
           {images.map((img, index) => {
             const heroTexts = [
               { 
-                smallTop: "AKSHAYA TRITIYA SPECIAL",
-                title: "GOLDEN WEAVES",
+                smallTop: "GRAND LAUNCH SALE",
+                title: "NEW BEGINNINGS",
                 subtitle: "FLAT 15% OFF ON ALL SAREES",
-                desc: "CELEBRATE THE ETERNAL PROSPERITY WITH VASTRUDAYAM'S EXCLUSIVE HANDLOOM COLLECTION"
+                desc: "CELEBRATE OUR GRAND LAUNCH WITH EXCLUSIVE HANDLOOM COLLECTION"
               },
               { 
-                smallTop: "VASTRUDAYAM EXCLUSIVES",
+                smallTop: "LAUNCH OFFERS",
                 title: "LUXURY SILKS",
                 subtitle: "TRADITION FOR GENERATIONS",
                 desc: "RARE WEAVES, FRESH DESIGNS, AND EXCLUSIVES YOU SIMPLY WON'T FIND ANYWHERE ELSE",
@@ -564,13 +564,13 @@ const Home = () => {
         setSelectedProduct={setSelectedProduct}
       />
 
-      {/* FESTIVE AKSHAYA TRITIYA BANNER */}
+      {/* GRAND LAUNCH SALE BANNER */}
       <section className="full-banner-section festive-banner">
         <div className="banner-overlay-gradient"></div>
         <div className="container-fluid banner-container-fluid">
           <div className="banner-content">
-            <h1 className="banner-heading festive-text">Akshaya Tritiya</h1>
-            <p className="banner-price-tag">Festival Sale: <span>Flat 15% OFF</span></p>
+            <h1 className="banner-heading festive-text">Grand Launch Sale</h1>
+            <p className="banner-price-tag">Launch Offer: <span>Flat 15% OFF</span></p>
             <button 
               className="btn-shop-now"
               onClick={() => navigate("/all-products")}

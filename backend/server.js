@@ -14,6 +14,7 @@ import { Server } from 'socket.io';
 import sgMail from '@sendgrid/mail';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
+import PDFDocument from 'pdfkit';
 
 // ================= APP CONFIG =================
 const app = express();
@@ -314,7 +315,8 @@ const initDatabase = async () => {
       ADD COLUMN IF NOT EXISTS state VARCHAR(100),
       ADD COLUMN IF NOT EXISTS pincode VARCHAR(10),
       ADD COLUMN IF NOT EXISTS store_name VARCHAR(255),
-      ADD COLUMN IF NOT EXISTS balance DECIMAL(10,2) DEFAULT 0;
+      ADD COLUMN IF NOT EXISTS balance DECIMAL(10,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS gst_number VARCHAR(50);
     `);
     await pool.query(`
       ALTER TABLE users 
@@ -331,6 +333,8 @@ const initDatabase = async () => {
         ADD COLUMN IF NOT EXISTS pickup_pincode VARCHAR(10),
         ADD COLUMN IF NOT EXISTS pickup_location_name VARCHAR(255)
       `);
+
+
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS vendor_pickup_addresses (
@@ -578,6 +582,13 @@ const initDatabase = async () => {
       );
     `);
 
+    await pool.query(`
+      ALTER TABLE payouts 
+      ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
+      ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    `);
+
     // 12. inventory
     await pool.query(`
       CREATE TABLE IF NOT EXISTS inventory (
@@ -690,6 +701,25 @@ const initDatabase = async () => {
       END $$;
     `);
     await pool.query(`ALTER TABLE stock_notifications ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES users(id);`);
+
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id SERIAL PRIMARY KEY,
+        vendor_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        transaction_type VARCHAR(50) NOT NULL, -- 'credit', 'debit'
+        amount DECIMAL(10,2) NOT NULL,
+        status VARCHAR(50) DEFAULT 'completed',
+        description TEXT,
+        order_id INTEGER REFERENCES orders(id),
+        payout_id INTEGER REFERENCES payouts(id),
+        platform_fee DECIMAL(10,2) DEFAULT 0,
+        coupon_discount_applied DECIMAL(10,2) DEFAULT 0,
+        original_amount DECIMAL(10,2),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
 
     // SETTINGS TABLE
     await pool.query(`
@@ -1562,7 +1592,7 @@ app.get("/api/admin/products/check-product-code", verifyToken, verifyAdminVendor
 
 app.get("/api/admin/products/next-available-code", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
-    let basePattern = "VAS-";
+    let basePattern = "JAYA-";
     let counter = 1;
     let found = false;
     let candidate = "";
@@ -1578,7 +1608,7 @@ app.get("/api/admin/products/next-available-code", verifyToken, verifyAdminVendo
     }
     res.json({ success: true, nextId: candidate });
   } catch (err) {
-    res.json({ success: true, nextId: "VAS-001" });
+    res.json({ success: true, nextId: "JAYA-001" });
   }
 });
 
@@ -1658,19 +1688,19 @@ app.get("/api/product/:uuid", async (req, res) => {
 
 app.get("/api/admin/products/next-id", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT product_code FROM products WHERE product_code LIKE 'VAS-%' ORDER BY id DESC LIMIT 1`);
-    let nextId = "VAS-001";
+    const result = await pool.query(`SELECT product_code FROM products WHERE product_code LIKE 'JAYA-%' ORDER BY id DESC LIMIT 1`);
+    let nextId = "JAYA-001";
     if (result && result.rows.length > 0) {
       const lastId = result.rows[0].product_code;
       if (lastId && lastId.includes("-")) {
         const parts = lastId.split("-");
         const lastNumber = parseInt(parts[1]);
-        if (!isNaN(lastNumber)) nextId = `VAS-${(lastNumber + 1).toString().padStart(3, '0')}`;
+        if (!isNaN(lastNumber)) nextId = `JAYA-${(lastNumber + 1).toString().padStart(3, '0')}`;
       }
     }
     res.json({ success: true, nextId });
   } catch (error) {
-    res.json({ success: true, nextId: "VAS-001" });
+    res.json({ success: true, nextId: "JAYA-001" });
   }
 });
 
@@ -2085,39 +2115,88 @@ app.get("/api/admin/orders", verifyToken, verifyAdminVendorIndividualAccess, asy
   }
 });
 
+// ================= ORDER STATUS UPDATE - ADD TO VENDOR BALANCE =================
+
 app.put("/api/admin/orders/:id/status", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  const client = await pool.connect();
   try {
     const { status } = req.body;
     const userRole = req.user.role?.toLowerCase();
 
+    await client.query("BEGIN");
+
     if (userRole !== 'super_admin') {
-      const orderCheck = await pool.query(`
+      const orderCheck = await client.query(`
         SELECT DISTINCT o.id FROM orders o
         JOIN order_items oi ON o.id = oi.order_id
         JOIN products p ON oi.product_id = p.id
         WHERE o.id = $1 AND p.vendor_id = $2
       `, [req.params.id, req.user.id]);
       if (orderCheck.rows.length === 0) {
+        await client.query("ROLLBACK");
         return res.status(403).json({ success: false, message: "Unauthorized to update this order" });
       }
     }
 
-    await pool.query(`UPDATE orders SET order_status=$1, updated_at=NOW() WHERE id=$2`, [status, req.params.id]);
+    await client.query(
+      `UPDATE orders SET order_status = $1, updated_at = NOW() WHERE id = $2`,
+      [status, req.params.id]
+    );
 
+    // When order is Delivered, add earnings to vendor balance
     if (status === 'Delivered') {
-      const items = await pool.query(`SELECT vendor_id, vendor_earning FROM order_items WHERE order_id = $1`, [req.params.id]);
+      const items = await client.query(`
+        SELECT oi.*, p.name as product_name, p.platform_fee_percent, o.discount as order_discount
+        FROM order_items oi
+        JOIN products p ON oi.product_id = p.id
+        JOIN orders o ON oi.order_id = o.id
+        WHERE oi.order_id = $1 AND oi.vendor_id IS NOT NULL
+      `, [req.params.id]);
+
+      console.log("Adding to vendor balance:", items.rows);
+
       for (let item of items.rows) {
-        if (item.vendor_id) {
-          await pool.query(`UPDATE users SET balance = balance + $1 WHERE id = $2`, [item.vendor_earning, item.vendor_id]);
+        if (item.vendor_id && item.vendor_earning > 0) {
+          // Add to balance
+          await client.query(
+            `UPDATE users SET balance = balance + $1 WHERE id = $2`,
+            [parseFloat(item.vendor_earning), item.vendor_id]
+          );
+
+          // Log wallet transaction for credit
+          const platformFeeAmount = (parseFloat(item.price) * item.quantity) * (parseFloat(item.platform_fee_percent) / 100);
+          const couponDiscount = parseFloat(item.order_discount || 0);
+
+          await client.query(
+            `INSERT INTO wallet_transactions 
+              (vendor_id, transaction_type, amount, status, description, order_id, platform_fee, coupon_discount_applied, original_amount) 
+             VALUES ($1, 'credit', $2, 'completed', $3, $4, $5, $6, $7)`,
+            [
+              item.vendor_id,
+              parseFloat(item.vendor_earning),
+              `Earnings from Order #${req.params.id} - ${item.product_name}`,
+              req.params.id,
+              platformFeeAmount,
+              couponDiscount,
+              parseFloat(item.price) * item.quantity
+            ]
+          );
+
+          console.log(`Added ₹${item.vendor_earning} to vendor ${item.vendor_id}`);
         }
       }
     }
+
+    await client.query("COMMIT");
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ success: false });
+    await client.query("ROLLBACK");
+    console.error("Order status update error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
   }
 });
-
 app.get("/api/orders", verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
@@ -2133,43 +2212,131 @@ app.get("/api/orders", verifyToken, async (req, res) => {
   }
 });
 
+// ================= ORDERS - FIXED COUPON DISCOUNT FOR VENDOR EARNINGS =================
+
 app.post("/api/orders", verifyToken, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { customer_name, email, phone, address, total_amount, discount, coupon_id, payment_method, cartItems, house_no, street_area, landmark } = req.body;
+    const {
+      customer_name,
+      email,
+      phone,
+      address,
+      total_amount,
+      discount,
+      coupon_id,
+      payment_method,
+      cartItems,
+      house_no,
+      street_area,
+      landmark
+    } = req.body;
+
     if (!cartItems || cartItems.length === 0) throw new Error("Cart is empty");
 
+    // Calculate original total and discount percentage
+    const originalTotal = cartItems.reduce((sum, item) => {
+      const price = parseFloat(item.price);
+      const qty = parseInt(item.qty || item.quantity || 1);
+      return sum + (price * qty);
+    }, 0);
+
+    const discountAmount = parseFloat(discount || 0);
+    const finalAmount = parseFloat(total_amount);
+
+    // Calculate discount percentage (how much discount was applied overall)
+    const discountPercentage = originalTotal > 0 ? (discountAmount / originalTotal) * 100 : 0;
+
+    console.log("Order calculation:", {
+      originalTotal,
+      discountAmount,
+      finalAmount,
+      discountPercentage: discountPercentage.toFixed(2) + "%"
+    });
+
+    // Insert order with discounted amount
     const orderRes = await client.query(
-      `INSERT INTO orders (user_id, customer_name, email, phone, address, total_amount, discount, coupon_id, payment_method, house_no, street_area, landmark) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
-      [req.user.id, customer_name, email, phone, address, total_amount, discount, coupon_id, payment_method || 'COD', house_no || '', street_area || '', landmark || '']
+      `INSERT INTO orders (
+        user_id, customer_name, email, phone, address, total_amount, 
+        discount, coupon_id, payment_method, house_no, street_area, landmark
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      [
+        req.user.id, customer_name, email, phone, address, finalAmount,
+        discountAmount, coupon_id || null, payment_method || 'COD',
+        house_no || '', street_area || '', landmark || ''
+      ]
     );
     const orderId = orderRes.rows[0].id;
 
+    // Insert order items with PROPORTIONALLY REDUCED vendor earnings based on discount
     for (let item of cartItems) {
-      const prodRes = await client.query("SELECT vendor_id, price, platform_fee_percent FROM products WHERE id = $1", [item.product_id || item.id]);
+      const prodRes = await client.query(
+        "SELECT vendor_id, price, platform_fee_percent FROM products WHERE id = $1",
+        [item.product_id || item.id]
+      );
       const vendor_id = prodRes.rows[0]?.vendor_id || null;
-      const actual_price = prodRes.rows[0]?.price || item.price;
-      const platform_fee = prodRes.rows[0]?.platform_fee_percent || 10;
-      const qty = item.qty || item.quantity;
-      const vendor_earning = (actual_price * qty) * ((100 - platform_fee) / 100);
+      const original_price = parseFloat(prodRes.rows[0]?.price || item.price);
+      const platform_fee_percent = parseFloat(prodRes.rows[0]?.platform_fee_percent || 10);
+      const qty = parseInt(item.qty || item.quantity || 1);
+
+      // Calculate discounted price for this item (proportional discount)
+      let discounted_price = original_price;
+
+      // Apply proportional discount if there's a coupon discount
+      if (discountAmount > 0 && originalTotal > 0) {
+        // Each item gets discount proportional to its original price
+        const itemOriginalTotal = original_price * qty;
+        const itemDiscount = (itemOriginalTotal / originalTotal) * discountAmount;
+        discounted_price = original_price - (itemDiscount / qty);
+        discounted_price = Math.max(0, discounted_price);
+      }
+
+      // Calculate vendor earnings after platform fee on the DISCOUNTED price
+      const vendor_earning = (discounted_price * qty) * ((100 - platform_fee_percent) / 100);
+
+      console.log(`Item ${item.name}:`, {
+        original_price,
+        discounted_price,
+        qty,
+        platform_fee_percent,
+        vendor_earning
+      });
 
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, quantity, price, vendor_id, vendor_earning) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [orderId, item.product_id || item.id, qty, item.price, vendor_id, vendor_earning]
+        `INSERT INTO order_items (order_id, product_id, quantity, price, vendor_id, vendor_earning) 
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [orderId, item.product_id || item.id, qty, discounted_price, vendor_id, vendor_earning]
       );
-      await client.query(`UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`, [qty, item.product_id || item.id]);
+
+      // Update stock
+      await client.query(
+        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
+        [qty, item.product_id || item.id]
+      );
     }
 
-    if (coupon_id) await client.query(`UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [coupon_id]);
+    // Update coupon usage count
+    if (coupon_id) {
+      await client.query(
+        `UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`,
+        [coupon_id]
+      );
+    }
+
+    // Clear cart
     await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id]);
+
     await client.query("COMMIT");
 
+    // Send notification
     const fullOrderResult = await pool.query(`SELECT * FROM orders WHERE id = $1`, [orderId]);
     sendAdminNotification(fullOrderResult.rows[0]);
+
     res.json({ success: true, orderId });
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("Order creation error:", error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();
@@ -2217,6 +2384,8 @@ app.post("/api/razorpay/order", verifyToken, async (req, res) => {
   }
 });
 
+// ================= RAZORPAY VERIFY - FIXED COUPON DISCOUNT =================
+
 app.post("/api/razorpay/verify", verifyToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2228,42 +2397,101 @@ app.post("/api/razorpay/verify", verifyToken, async (req, res) => {
     await client.query("BEGIN");
     const { customer_name, email, phone, address, total_amount, discount, coupon_id, cartItems, house_no, street_area, landmark } = orderDetails;
 
+    // Calculate original total and discount percentage
+    const originalTotal = cartItems.reduce((sum, item) => {
+      const price = parseFloat(item.price);
+      const qty = parseInt(item.qty || item.quantity || 1);
+      return sum + (price * qty);
+    }, 0);
+
+    const discountAmount = parseFloat(discount || 0);
+    const finalAmount = parseFloat(total_amount);
+
+    // Calculate discount percentage
+    const discountPercentage = originalTotal > 0 ? (discountAmount / originalTotal) * 100 : 0;
+
     const orderRes = await client.query(
-      `INSERT INTO orders (user_id, customer_name, email, phone, address, total_amount, discount, coupon_id, payment_method, payment_status, order_status, house_no, street_area, landmark, razorpay_order_id, razorpay_payment_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
-      [req.user.id, customer_name, email, phone, address, total_amount, discount, coupon_id, 'RAZORPAY', 'Completed', 'Placed', house_no || '', street_area || '', landmark || '', razorpay_order_id, razorpay_payment_id]
+      `INSERT INTO orders (
+        user_id, customer_name, email, phone, address, total_amount, 
+        discount, coupon_id, payment_method, payment_status, order_status, 
+        house_no, street_area, landmark, razorpay_order_id, razorpay_payment_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+      [
+        req.user.id, customer_name, email, phone, address, finalAmount,
+        discountAmount, coupon_id, 'RAZORPAY', 'Completed', 'Placed',
+        house_no || '', street_area || '', landmark || '',
+        razorpay_order_id, razorpay_payment_id
+      ]
     );
     const orderId = orderRes.rows[0].id;
 
+    // Insert order items with PROPORTIONALLY REDUCED vendor earnings
     for (let item of cartItems) {
-      const prodRes = await client.query("SELECT vendor_id, price, platform_fee_percent FROM products WHERE id = $1", [item.product_id || item.id]);
+      const prodRes = await client.query(
+        "SELECT vendor_id, price, platform_fee_percent FROM products WHERE id = $1",
+        [item.product_id || item.id]
+      );
       const vendor_id = prodRes.rows[0]?.vendor_id || null;
-      const actual_price = prodRes.rows[0]?.price || item.price;
-      const platform_fee = prodRes.rows[0]?.platform_fee_percent || 10;
-      const qty = item.qty || item.quantity;
-      const vendor_earning = (actual_price * qty) * ((100 - platform_fee) / 100);
+      const original_price = parseFloat(prodRes.rows[0]?.price || item.price);
+      const platform_fee_percent = parseFloat(prodRes.rows[0]?.platform_fee_percent || 10);
+      const qty = parseInt(item.qty || item.quantity || 1);
 
-      await client.query(`INSERT INTO order_items (order_id, product_id, quantity, price, vendor_id, vendor_earning) VALUES ($1, $2, $3, $4, $5, $6)`, [orderId, item.product_id || item.id, qty, item.price, vendor_id, vendor_earning]);
-      await client.query(`UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`, [qty, item.product_id || item.id]);
+      // Calculate discounted price for this item (proportional discount)
+      let discounted_price = original_price;
+      if (discountAmount > 0 && originalTotal > 0) {
+        const itemOriginalTotal = original_price * qty;
+        const itemDiscount = (itemOriginalTotal / originalTotal) * discountAmount;
+        discounted_price = original_price - (itemDiscount / qty);
+        discounted_price = Math.max(0, discounted_price);
+      }
+
+      // Calculate vendor earnings on discounted price
+      const vendor_earning = (discounted_price * qty) * ((100 - platform_fee_percent) / 100);
+
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, price, vendor_id, vendor_earning) 
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [orderId, item.product_id || item.id, qty, discounted_price, vendor_id, vendor_earning]
+      );
+
+      await client.query(
+        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
+        [qty, item.product_id || item.id]
+      );
     }
 
-    if (coupon_id) await client.query(`UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [coupon_id]);
+    if (coupon_id) {
+      await client.query(`UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [coupon_id]);
+    }
+
     await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id]);
     await client.query("COMMIT");
 
-    sendAdminNotification({ id: orderId, customer_name, email, phone, address, total_amount, payment_method: 'RAZORPAY' });
+    sendAdminNotification({
+      id: orderId,
+      customer_name,
+      email,
+      phone,
+      address,
+      total_amount: finalAmount,
+      payment_method: 'RAZORPAY'
+    });
+
     res.json({ success: true, orderId, message: "Payment successful, order placed" });
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("Razorpay verification error:", error);
     res.status(500).json({ success: false, message: error.message || "Payment verification failed" });
   } finally {
     client.release();
   }
 });
+// ================= PAYOUTS ROUTES (UPDATED) =================
 
-// ================= PAYOUTS ROUTES =================
+// Get payouts for vendor/admin - FIXED to only show actual balance
 app.get("/api/admin/payouts", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
-    let query = `SELECT p.*, u.store_name, u.email FROM payouts p JOIN users u ON p.vendor_id = u.id WHERE 1=1`;
+    let query = `SELECT p.*, u.store_name, u.email, u.name as vendor_name, u.phone as vendor_phone FROM payouts p JOIN users u ON p.vendor_id = u.id WHERE 1=1`;
     let params = [];
     const userRole = req.user.role?.toLowerCase();
     if (userRole !== 'super_admin') {
@@ -2275,16 +2503,26 @@ app.get("/api/admin/payouts", verifyToken, verifyAdminVendorIndividualAccess, as
 
     let balance = 0;
     if (userRole !== 'super_admin') {
+      // Calculate actual balance based on PAID payouts only
       const userRes = await pool.query(`SELECT balance FROM users WHERE id = $1`, [req.user.id]);
-      balance = userRes.rows[0].balance;
+      balance = parseFloat(userRes.rows[0].balance) || 0;
+
+      // Also get pending payouts to show on hold amount
+      const pendingRes = await pool.query(
+        `SELECT COALESCE(SUM(amount), 0) as pending_total FROM payouts WHERE vendor_id = $1 AND status = 'Pending'`,
+        [req.user.id]
+      );
+      balance = balance; // This is the actual available balance
     }
 
     res.json({ success: true, payouts: result.rows, balance });
   } catch (err) {
+    console.error("Payouts fetch error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
+// Request payout - FIXED
 app.post("/api/admin/payouts/request", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -2295,30 +2533,86 @@ app.post("/api/admin/payouts/request", verifyToken, verifyAdminVendorIndividualA
     if (!amount || amount <= 0) throw new Error("Invalid amount");
 
     const userRes = await client.query(`SELECT balance FROM users WHERE id = $1 FOR UPDATE`, [vendorId]);
-    if (userRes.rows[0].balance < amount) throw new Error("Insufficient wallet balance");
+    const currentBalance = parseFloat(userRes.rows[0].balance) || 0;
 
+    if (currentBalance < amount) throw new Error("Insufficient wallet balance");
+
+    // Deduct from balance
     await client.query(`UPDATE users SET balance = balance - $1 WHERE id = $2`, [amount, vendorId]);
-    await client.query(`INSERT INTO payouts (vendor_id, amount, bank_details) VALUES ($1, $2, $3)`, [vendorId, amount, bank_details]);
+
+    // Create payout request
+    const payoutRes = await client.query(
+      `INSERT INTO payouts (vendor_id, amount, bank_details, status, requested_at) 
+       VALUES ($1, $2, $3, 'Pending', NOW()) RETURNING id`,
+      [vendorId, amount, bank_details]
+    );
+
+    const payoutId = payoutRes.rows[0].id;
+
+    // Log wallet transaction for debit
+    await client.query(
+      `INSERT INTO wallet_transactions 
+        (vendor_id, transaction_type, amount, status, description, payout_id, original_amount) 
+       VALUES ($1, 'debit', $2, 'pending', $3, $4, $5)`,
+      [
+        vendorId,
+        amount,
+        `Withdrawal request #${payoutId} - Pending approval`,
+        payoutId,
+        amount
+      ]
+    );
 
     await client.query("COMMIT");
     res.json({ success: true, message: "Payout requested successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
+    console.error("Payout request error:", err);
     res.status(400).json({ success: false, message: err.message });
   } finally {
     client.release();
   }
 });
 
+
+// Approve payout (Super Admin only) - FIXED
 app.put("/api/admin/payouts/:id/approve", verifyToken, verifySuperAdmin, async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query(`UPDATE payouts SET status = 'Paid', processed_at = NOW() WHERE id = $1`, [req.params.id]);
-    res.json({ success: true, message: "Payout approved" });
+    await client.query("BEGIN");
+
+    const payoutCheck = await client.query(
+      "SELECT * FROM payouts WHERE id = $1 AND status = 'Pending'",
+      [req.params.id]
+    );
+
+    if (payoutCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Payout request not found or already processed" });
+    }
+
+    const payout = payoutCheck.rows[0];
+
+    await client.query(
+      `UPDATE payouts SET status = 'Paid', processed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+      [req.params.id]
+    );
+
+    // Update wallet transaction status
+    await client.query(
+      `UPDATE wallet_transactions SET status = 'completed' WHERE payout_id = $1`,
+      [req.params.id]
+    );
+
+    await client.query("COMMIT");
+    res.json({ success: true, message: "Payout approved successfully" });
   } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Approve payout error:", err);
     res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
   }
 });
-
 app.get("/api/admin/payouts/summary", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const summary = await pool.query(`
@@ -2337,6 +2631,15 @@ app.get("/api/admin/payouts/summary", verifyToken, verifySuperAdmin, async (req,
 app.get("/api/admin/payouts/vendor-summary/:vendorId", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
     const vendorId = req.params.vendorId;
+
+    // Get vendor's current balance
+    const vendorRes = await pool.query(
+      "SELECT balance FROM users WHERE id = $1",
+      [vendorId]
+    );
+    const currentBalance = vendorRes.rows[0]?.balance || 0;
+
+    // Get payout summary
     const summary = await pool.query(`
       SELECT 
         COALESCE(SUM(CASE WHEN status = 'Pending' THEN amount ELSE 0 END), 0) as total_pending,
@@ -2345,22 +2648,38 @@ app.get("/api/admin/payouts/vendor-summary/:vendorId", verifyToken, verifySuperA
       FROM payouts
       WHERE vendor_id = $1
     `, [vendorId]);
-    res.json({ success: true, summary: summary.rows[0] });
+
+    res.json({
+      success: true,
+      summary: {
+        ...summary.rows[0],
+        current_balance: currentBalance
+      }
+    });
   } catch (err) {
+    console.error("Vendor summary error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
+// Get vendor balances summary - FIXED to show actual available balance
 app.get("/api/admin/vendor-balances", verifyToken, verifySuperAdmin, async (req, res) => {
   try {
+    // Get all vendors with their current balance
     const result = await pool.query(`
-      SELECT id, name, email, store_name, balance
-      FROM users
-      WHERE role = 'vendor'
-      ORDER BY name ASC
+      SELECT 
+        u.id, 
+        u.name, 
+        u.email, 
+        u.store_name, 
+        COALESCE(u.balance, 0) as balance
+      FROM users u
+      WHERE u.role = 'vendor'
+      ORDER BY u.name ASC
     `);
+
     res.json({ success: true, vendors: result.rows });
   } catch (err) {
+    console.error("Vendor balances error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2443,57 +2762,93 @@ app.post("/api/coupons/apply", verifyToken, async (req, res) => {
   try {
     const { code, totalAmount, cartItems } = req.body;
 
-    const result = await pool.query("SELECT * FROM coupons WHERE code ILIKE $1 AND is_active=true", [code]);
-    if (result.rows.length === 0) return res.status(400).json({ message: "Invalid coupon" });
+    console.log("Applying coupon:", { code, totalAmount, cartItemsCount: cartItems?.length });
+
+    // Get coupon from database
+    const result = await pool.query("SELECT * FROM coupons WHERE code ILIKE $1 AND is_active = true", [code]);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: "Invalid coupon code" });
+    }
+
     const coupon = result.rows[0];
 
-    if (coupon.expiry_date && new Date(coupon.expiry_date) < new Date())
-      return res.status(400).json({ message: "Coupon expired" });
-    if (coupon.usage_limit && coupon.used_count >= coupon.usage_limit)
+    // Check expiry
+    if (coupon.expiry_date && new Date(coupon.expiry_date) < new Date()) {
+      return res.status(400).json({ message: "Coupon has expired" });
+    }
+
+    // Check usage limit
+    if (coupon.usage_limit && coupon.used_count >= coupon.usage_limit) {
       return res.status(400).json({ message: "Coupon usage limit reached" });
+    }
 
-    let applicableSubtotal = totalAmount;
+    let applicableSubtotal = parseFloat(totalAmount);
 
+    // If coupon is vendor-specific, calculate subtotal for that vendor only
     if (coupon.vendor_id) {
-      if (!cartItems || cartItems.length === 0)
+      if (!cartItems || cartItems.length === 0) {
         return res.status(400).json({ message: "Cart is empty" });
+      }
 
       const vendorSubtotal = cartItems.reduce((sum, item) => {
         if (item.vendor_id === coupon.vendor_id) {
-          return sum + (item.price * item.quantity);
+          const itemPrice = parseFloat(item.price);
+          const itemQty = parseInt(item.quantity) || parseInt(item.qty) || 1;
+          return sum + (itemPrice * itemQty);
         }
         return sum;
       }, 0);
 
-      if (vendorSubtotal === 0)
+      if (vendorSubtotal === 0) {
         return res.status(400).json({ message: "Coupon not applicable to any product in your cart" });
+      }
 
       applicableSubtotal = vendorSubtotal;
     }
 
-    if (applicableSubtotal < coupon.min_order_amount) {
+    // Check minimum order amount
+    const minOrderAmount = parseFloat(coupon.min_order_amount);
+    if (applicableSubtotal < minOrderAmount) {
       return res.status(400).json({
-        message: `Minimum order amount of ₹${coupon.min_order_amount} required for this coupon`
+        message: `Minimum order amount of ₹${minOrderAmount} required for this coupon`
       });
     }
 
-    let discount = coupon.discount_type === "percentage"
-      ? (applicableSubtotal * coupon.discount_value) / 100
-      : coupon.discount_value;
+    // Calculate discount
+    let discount = 0;
+    const discountValue = parseFloat(coupon.discount_value);
 
-    if (coupon.max_discount && discount > coupon.max_discount) discount = coupon.max_discount;
+    if (coupon.discount_type === "percentage") {
+      discount = (applicableSubtotal * discountValue) / 100;
+    } else {
+      discount = discountValue;
+    }
+
+    // Apply max discount limit
+    const maxDiscount = parseFloat(coupon.max_discount);
+    if (maxDiscount && discount > maxDiscount) {
+      discount = maxDiscount;
+    }
+
+    // Round discount to 2 decimal places
+    discount = Math.round(discount * 100) / 100;
+
+    console.log("Calculated discount:", discount);
 
     res.json({
       success: true,
-      discount,
+      discount: discount,
       finalAmount: totalAmount - discount,
       couponId: coupon.id,
-      coupon
+      coupon: coupon
     });
+
   } catch (error) {
-    res.status(500).json({ message: "Coupon apply failed" });
+    console.error("Coupon apply error:", error);
+    res.status(500).json({ message: "Failed to apply coupon", error: error.message });
   }
 });
+
 
 app.post("/api/coupons/auto-apply", verifyToken, async (req, res) => {
   try {
@@ -2859,10 +3214,16 @@ app.get("/api/user/returns", verifyToken, async (req, res) => {
   }
 });
 
+// ================= RETURN SYSTEM =================
 app.get("/api/admin/returns", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
     let query = `
-       SELECT DISTINCT r.*, o.customer_name, o.phone, u.name as user_name
+       SELECT DISTINCT ON (r.id) 
+         r.*, 
+         o.customer_name, 
+         o.phone, 
+         u.name as user_name,
+         oi.vendor_id
        FROM returns r
        JOIN orders o ON r.order_id = o.id
        JOIN users u ON r.user_id = u.id
@@ -2870,16 +3231,20 @@ app.get("/api/admin/returns", verifyToken, verifyAdminVendorIndividualAccess, as
        WHERE 1=1
     `;
     let params = [];
+
     if (req.user.role !== 'super_admin') {
       query += ` AND oi.vendor_id = $1`;
       params.push(req.user.id);
     }
-    query += ` ORDER BY r.status = 'Pending' DESC, r.created_at DESC`;
+
+    query += ` GROUP BY r.id, o.customer_name, o.phone, u.name, oi.vendor_id
+               ORDER BY r.id, CASE WHEN r.status = 'Pending' THEN 0 ELSE 1 END, r.created_at DESC`;
 
     const result = await pool.query(query, params);
     res.json({ success: true, returns: result.rows });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to fetch returns" });
+    console.error("Returns fetch error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch returns", error: error.message });
   }
 });
 
@@ -2888,84 +3253,42 @@ app.put("/api/admin/returns/:id/status", verifyToken, verifyAdminVendorIndividua
     if (req.user.role !== 'super_admin') {
       const check = await pool.query(`
         SELECT r.id FROM returns r
-        JOIN order_items oi ON r.order_id = oi.order_id
+        JOIN orders o ON r.order_id = o.id
+        JOIN order_items oi ON o.id = oi.order_id
         WHERE r.id = $1 AND oi.vendor_id = $2
+        LIMIT 1
       `, [req.params.id, req.user.id]);
-      if (check.rows.length === 0) return res.status(403).json({ success: false, message: "Unauthorized" });
+      if (check.rows.length === 0) {
+        return res.status(403).json({ success: false, message: "Unauthorized" });
+      }
     }
 
     const { status, admin_comment } = req.body;
     const returnId = req.params.id;
 
-    const result = await pool.query(`UPDATE returns SET status = $1, admin_comment = $2, updated_at = NOW() WHERE id = $3 RETURNING *`, [status, admin_comment, returnId]);
-    if (result.rows.length === 0) return res.status(404).json({ success: false, message: "Return request not found" });
+    const result = await pool.query(
+      `UPDATE returns SET status = $1, admin_comment = $2, updated_at = NOW() 
+       WHERE id = $3 RETURNING *`,
+      [status, admin_comment, returnId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Return request not found" });
+    }
 
     if (status === 'Approved') {
-      await pool.query("UPDATE orders SET order_status = 'Return Approved' WHERE id = (SELECT order_id FROM returns WHERE id = $1)", [returnId]);
-
-      try {
-        const returnRecordRows = await pool.query("SELECT order_id FROM returns WHERE id = $1", [returnId]);
-        const orderId = returnRecordRows.rows[0].order_id;
-        const orderRes = await pool.query("SELECT * FROM orders WHERE id = $1", [orderId]);
-        const order = orderRes.rows[0];
-
-        const itemsRes = await pool.query(`SELECT oi.*, p.name, p.sku, p.weight FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = $1`, [orderId]);
-        const orderItems = itemsRes.rows.map(item => ({
-          name: item.name, sku: item.sku || `SKU-${item.product_id}`, units: item.quantity, selling_price: parseFloat(item.price), discount: "", tax: ""
-        }));
-
-        const pkgWeight = itemsRes.rows.reduce((sum, item) => sum + (parseFloat(item.weight || 0.5) * item.quantity), 0);
-        const pinMatch = order.address.match(/\b\d{6}\b/);
-        const customerPincode = pinMatch ? pinMatch[0] : "500001";
-
-        const token = await authenticateShiprocket();
-        const payload = {
-          order_id: `RETURN-ORD${order.id}-${returnId}`,
-          order_date: new Date().toISOString().split('T')[0] + " 10:00",
-          channel_id: "",
-          pickup_customer_name: order.customer_name || "Customer",
-          pickup_last_name: "VA",
-          pickup_address: order.address || "No address provided",
-          pickup_address_2: "",
-          pickup_city: "City",
-          pickup_state: "State",
-          pickup_country: "India",
-          pickup_pincode: customerPincode,
-          pickup_email: order.email || "vastrudayamofficial@gmail.com",
-          pickup_phone: order.phone || "9019397278",
-          shipping_customer_name: "VASTRUDAYAM RETURNS",
-          shipping_last_name: "VA",
-          shipping_address: "165/1, Priya Swaroop, 11th cross, beside RAINEO STUDIO",
-          shipping_address_2: "Modi Hospital Rd, Model LIC Colony, Basaveshwar Nagar",
-          shipping_city: "Bengaluru",
-          shipping_country: "India",
-          shipping_pincode: "560079",
-          shipping_state: "Karnataka",
-          shipping_email: "vastrudayamofficial@gmail.com",
-          shipping_phone: "9019397278",
-          order_items: orderItems,
-          payment_method: "Prepaid",
-          sub_total: order.total_amount,
-          length: 10, breadth: 10, height: 5, weight: pkgWeight
-        };
-
-        const fetchRes = await fetch("https://apiv2.shiprocket.in/v1/external/orders/create/return", {
-          method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify(payload)
-        });
-
-        const srResult = await fetchRes.json();
-        if (fetchRes.ok && srResult.order_id) console.log("🚀 Reverse pickup created:", srResult.order_id);
-        else console.error("❌ Reverse pickup failed:", srResult);
-      } catch (srErr) {
-        console.error("Shiprocket Reverse Pickup Trigger Error:", srErr);
-      }
+      await pool.query(
+        "UPDATE orders SET order_status = 'Return Approved' WHERE id = (SELECT order_id FROM returns WHERE id = $1)",
+        [returnId]
+      );
     }
+
     res.json({ success: true, returnRequest: result.rows[0] });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to update return status" });
+    console.error("Return status update error:", error);
+    res.status(500).json({ success: false, message: "Failed to update return status", error: error.message });
   }
 });
-
 // ================= ANALYTICS / REPORTS =================
 app.get("/api/admin/reports", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
   try {
@@ -3095,7 +3418,7 @@ app.delete("/api/admin/menu-items/:id", verifyToken, verifySuperAdmin, async (re
 
 app.get("/api/admin/dashboard/stats", verifyToken, verifyAnyAdmin, async (req, res) => {
   try {
-    const isVendor = req.user.role === 'vendor' || req.user.role === 'admin'; 
+    const isVendor = req.user.role === 'vendor' || req.user.role === 'admin';
     const vId = req.user.id;
 
     const prodQuery = isVendor ? "SELECT COUNT(*) FROM products WHERE vendor_id = $1" : "SELECT COUNT(*) FROM products";
@@ -3226,19 +3549,19 @@ app.post("/api/admin/orders/:id/shiprocket", verifyToken, verifyAdminVendorIndiv
     const customerPincode = pinMatch ? pinMatch[0] : "500001";
 
     const payload = {
-      order_id: `VASTRUDAYAM-${order.id}`,
+      order_id: `JAYASTRA-${order.id}`,
       order_date: new Date(order.created_at).toISOString().split('T')[0] + " 10:00",
       pickup_location: pickup.location_name,
       billing_customer_name: order.customer_name || "Customer",
-      billing_last_name: "VA",
+      billing_last_name: "JAYA",
       billing_address: order.house_no && order.street_area ? `${order.house_no}, ${order.street_area}` : order.address,
       billing_address_2: order.landmark || "",
       billing_city: order.city || "City",
       billing_pincode: customerPincode,
       billing_state: order.state || "State",
       billing_country: "India",
-      billing_email: order.email || "support@vastrudayam.com",
-      billing_phone: order.phone || "9999999999",
+      billing_email: order.email || "jayastrastore@gmail.com",
+      billing_phone: order.phone || "9652896180",
       shipping_is_billing: true,
       order_items: orderItems,
       payment_method: (order.payment_method === 'Prepaid' || order.payment_method === 'RAZORPAY') ? 'Prepaid' : 'COD',
@@ -3396,7 +3719,7 @@ app.post("/api/admin/orders/:id/invoice", verifyToken, verifyAdminVendorIndividu
 app.post("/api/webhooks/logistics", async (req, res) => {
   try {
     const providedToken = req.headers['x-api-key'];
-    if (providedToken !== "VastrudayamWebhookSecure123") return res.status(401).send("Unauthorized");
+    if (providedToken !== "JayastraWebhookSecure123") return res.status(401).send("Unauthorized");
 
     const payload = req.body;
     const shipmentId = payload.shipment_id;
@@ -3593,7 +3916,609 @@ app.put("/api/admin/settings/platform-fee", verifyToken, verifySuperAdmin, async
   }
 });
 
-app.get("/", (req, res) => res.send("Vastrudayam API is running 🚀"));
+
+// Get earning stats - FIXED to only count Paid payouts
+app.get("/api/admin/payouts/earning-stats", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const userRole = req.user.role?.toLowerCase();
+    const vendorId = req.user.id;
+
+    let query = `
+      SELECT 
+        COALESCE(SUM(CASE WHEN status = 'Paid' AND DATE_TRUNC('month', processed_at) = DATE_TRUNC('month', NOW()) THEN amount ELSE 0 END), 0) as current_month,
+        COALESCE(SUM(CASE WHEN status = 'Paid' AND DATE_TRUNC('month', processed_at) = DATE_TRUNC('month', NOW() - INTERVAL '1 month') THEN amount ELSE 0 END), 0) as last_month,
+        COALESCE(SUM(CASE WHEN status = 'Paid' THEN amount ELSE 0 END), 0) as total_earned,
+        COALESCE(SUM(CASE WHEN status = 'Pending' THEN amount ELSE 0 END), 0) as pending_settlement
+      FROM payouts
+      WHERE 1=1
+    `;
+
+    let params = [];
+    if (userRole !== 'super_admin') {
+      query += ` AND vendor_id = $1`;
+      params.push(vendorId);
+    }
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, stats: result.rows[0] });
+  } catch (err) {
+    console.error("Earning stats error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+// Add this to your existing routes in the backend file
+
+// ================= INVOICES ROUTES WITH PROPER PDF =================
+
+app.get("/api/admin/invoices", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const userRole = req.user.role?.toLowerCase();
+    const vendorId = req.user.id;
+
+    let query = `
+      SELECT 
+        p.id,
+        p.vendor_id,
+        p.amount,
+        p.status,
+        p.requested_at as created_at,
+        p.processed_at,
+        u.store_name,
+        u.name as vendor_name,
+        u.email,
+        u.phone,
+        u.address,
+        u.gst_number
+      FROM payouts p
+      JOIN users u ON p.vendor_id = u.id
+      WHERE p.status = 'Paid'
+    `;
+
+    let params = [];
+    if (userRole !== 'super_admin') {
+      query += ` AND p.vendor_id = $1`;
+      params.push(vendorId);
+    }
+
+    query += ` ORDER BY p.processed_at DESC`;
+
+    const result = await pool.query(query, params);
+
+    const invoices = result.rows.map(row => ({
+      id: row.id,
+      vendor_id: row.vendor_id,
+      store_name: row.store_name,
+      vendor_name: row.vendor_name,
+      email: row.email,
+      phone: row.phone,
+      address: row.address,
+      gst_number: row.gst_number,
+      amount: parseFloat(row.amount),
+      status: row.status,
+      created_at: row.created_at,
+      processed_at: row.processed_at,
+      description: `Settlement for payout request #${row.id}`
+    }));
+
+    res.json({ success: true, invoices });
+  } catch (err) {
+    console.error("Invoices fetch error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// ================= SETTLEMENT REPORT DOWNLOAD (CSV/Excel) =================
+app.get("/api/admin/payouts/report/download", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const userRole = req.user.role?.toLowerCase();
+    const vendorId = req.user.id;
+    const { vendor_id, from, to, format = 'csv' } = req.query;
+
+    let query = `
+      SELECT p.*, u.name as vendor_name, u.email as vendor_email, u.store_name, u.phone
+      FROM payouts p
+      JOIN users u ON p.vendor_id = u.id
+      WHERE 1=1
+    `;
+
+    let params = [];
+    let paramCounter = 1;
+
+    if (userRole !== 'super_admin') {
+      query += ` AND p.vendor_id = $${paramCounter++}`;
+      params.push(vendorId);
+    } else if (vendor_id) {
+      query += ` AND p.vendor_id = $${paramCounter++}`;
+      params.push(vendor_id);
+    }
+
+    if (from) {
+      query += ` AND p.requested_at >= $${paramCounter++}`;
+      params.push(from);
+    }
+
+    if (to) {
+      query += ` AND p.requested_at <= $${paramCounter++}`;
+      params.push(to + ' 23:59:59');
+    }
+
+    query += ` ORDER BY p.requested_at DESC`;
+
+    const result = await pool.query(query, params);
+
+    // Calculate summary
+    const totalAmount = result.rows.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const totalPending = result.rows.filter(p => p.status === 'Pending').reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const totalPaid = result.rows.filter(p => p.status === 'Paid').reduce((sum, p) => sum + parseFloat(p.amount), 0);
+
+    // Generate CSV
+    const headers = [
+      'Settlement ID',
+      'Vendor Name',
+      'Store Name',
+      'Email',
+      'Phone',
+      'Amount (₹)',
+      'Status',
+      'Bank Details',
+      'Requested Date',
+      'Processed Date'
+    ];
+
+    const rows = result.rows.map(p => [
+      `STL-${String(p.id).padStart(6, '0')}`,
+      p.vendor_name,
+      p.store_name || '-',
+      p.vendor_email,
+      p.phone || '-',
+      parseFloat(p.amount).toFixed(2),
+      p.status,
+      p.bank_details?.replace(/,/g, ';')?.replace(/\n/g, ' ') || '-',
+      new Date(p.requested_at).toLocaleString('en-IN'),
+      p.processed_at ? new Date(p.processed_at).toLocaleString('en-IN') : '-'
+    ]);
+
+    // Add summary rows
+    const summaryRows = [
+      [],
+      ['REPORT SUMMARY', '', '', '', '', '', '', '', '', ''],
+      ['Total Settlements', result.rows.length.toString(), '', '', '', totalAmount.toFixed(2), '', '', '', ''],
+      ['Total Pending', result.rows.filter(p => p.status === 'Pending').length.toString(), '', '', '', totalPending.toFixed(2), '', '', '', ''],
+      ['Total Paid', result.rows.filter(p => p.status === 'Paid').length.toString(), '', '', '', totalPaid.toFixed(2), '', '', '', ''],
+      [],
+      [`Generated On: ${new Date().toLocaleString()}`, '', '', '', '', '', '', '', '', ''],
+      [`Report Period: ${from || 'Start'} to ${to || 'End'}`, '', '', '', '', '', '', '', '', '']
+    ];
+
+    const allRows = [headers, ...rows, ...summaryRows];
+    const csvContent = allRows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+
+    const filename = `settlement_report_${new Date().toISOString().split('T')[0]}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send('\uFEFF' + csvContent); // Add BOM for UTF-8 encoding
+
+  } catch (err) {
+    console.error("Report download error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ================= MONTHLY STATEMENT DOWNLOAD =================
+app.get("/api/admin/payouts/monthly-statement/download", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const userRole = req.user.role?.toLowerCase();
+    const vendorId = req.user.id;
+
+    let query = `
+      SELECT p.*, u.name as vendor_name, u.email as vendor_email, u.store_name, u.phone, u.address
+      FROM payouts p
+      JOIN users u ON p.vendor_id = u.id
+      WHERE EXTRACT(MONTH FROM p.requested_at) = $1 
+      AND EXTRACT(YEAR FROM p.requested_at) = $2
+    `;
+
+    let params = [month, year];
+
+    if (userRole !== 'super_admin') {
+      query += ` AND p.vendor_id = $3`;
+      params.push(vendorId);
+    }
+
+    query += ` ORDER BY p.requested_at DESC`;
+
+    const result = await pool.query(query, params);
+    const payouts = result.rows;
+
+    // Parse amounts to numbers
+    const totalAmount = payouts.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const completedAmount = payouts.filter(p => p.status === 'Paid').reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const pendingAmount = payouts.filter(p => p.status === 'Pending').reduce((sum, p) => sum + parseFloat(p.amount), 0);
+
+    // Create PDF
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=statement_${month}_${year}.pdf`);
+
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(24)
+      .font('Helvetica-Bold')
+      .fillColor('#8E2139')
+      .text('JAYASTRA STORE', { align: 'center' });
+
+    doc.fontSize(16)
+      .fillColor('#333333')
+      .text('Monthly Account Statement', { align: 'center' });
+
+    doc.fontSize(12)
+      .fillColor('#666666')
+      .text(`${month} ${year}`, { align: 'center' });
+
+    doc.moveDown(1);
+
+    doc.strokeColor('#E0E0E0')
+      .lineWidth(1)
+      .moveTo(50, doc.y)
+      .lineTo(550, doc.y)
+      .stroke();
+
+    doc.moveDown(1);
+
+    // Vendor Info
+    const vendor = payouts[0] || {};
+    doc.fontSize(10)
+      .font('Helvetica-Bold')
+      .fillColor('#333333')
+      .text('Account Holder Details:', 50, doc.y);
+
+    doc.font('Helvetica')
+      .text(`Name: ${vendor.store_name || vendor.vendor_name || 'N/A'}`, 50, doc.y + 5)
+      .text(`Email: ${vendor.vendor_email || 'N/A'}`, 50, doc.y + 20)
+      .text(`Phone: ${vendor.phone || 'N/A'}`, 300, doc.y + 5);
+
+    if (vendor.address) {
+      doc.text(`Address: ${vendor.address.substring(0, 80)}`, 50, doc.y + 35);
+    }
+
+    doc.moveDown(4);
+
+    // Summary Cards
+    const summaryY = doc.y;
+    doc.rect(50, summaryY, 150, 70).fillAndStroke('#F0FDF4', '#86EFAC');
+    doc.rect(210, summaryY, 150, 70).fillAndStroke('#FEF3C7', '#FDE68A');
+    doc.rect(370, summaryY, 150, 70).fillAndStroke('#EFF6FF', '#BFDBFE');
+
+    doc.fontSize(10).font('Helvetica-Bold').fillColor('#166534');
+    doc.text('Total Transactions', 70, summaryY + 15);
+    doc.fontSize(18).text(payouts.length.toString(), 70, summaryY + 35);
+
+    doc.fillColor('#92400E');
+    doc.text('Total Amount', 230, summaryY + 15);
+    doc.fontSize(18).text(`₹${totalAmount.toFixed(2)}`, 230, summaryY + 35);
+
+    doc.fillColor('#1E40AF');
+    doc.text('Settled Amount', 390, summaryY + 15);
+    doc.fontSize(18).text(`₹${completedAmount.toFixed(2)}`, 390, summaryY + 35);
+
+    doc.moveDown(7);
+
+    // Transactions Table
+    const tableTop = doc.y;
+    doc.rect(50, tableTop, 500, 25).fillAndStroke('#8E2139', '#8E2139');
+
+    doc.fillColor('#FFFFFF')
+      .fontSize(9)
+      .font('Helvetica-Bold')
+      .text('Date', 60, tableTop + 7)
+      .text('Transaction ID', 150, tableTop + 7)
+      .text('Amount (₹)', 350, tableTop + 7)
+      .text('Status', 430, tableTop + 7);
+
+    let currentY = tableTop + 25;
+    payouts.forEach((p, index) => {
+      if (currentY > 700) {
+        doc.addPage();
+        currentY = 50;
+      }
+
+      doc.fillColor('#333333')
+        .fontSize(9)
+        .font('Helvetica')
+        .text(new Date(p.requested_at).toLocaleDateString(), 60, currentY + 5)
+        .text(`PYT-${String(p.id).padStart(6, '0')}`, 150, currentY + 5)
+        .text(parseFloat(p.amount).toFixed(2), 350, currentY + 5)
+        .text(p.status, 430, currentY + 5);
+
+      doc.rect(50, currentY, 500, 20).stroke();
+      currentY += 20;
+    });
+
+    // Footer
+    doc.moveDown(2);
+    const footerY = doc.y;
+    doc.fontSize(8)
+      .fillColor('#9CA3AF')
+      .text('This is a computer generated statement. For queries, contact accounts@jayastra.com', 50, footerY, { align: 'center' })
+      .text(`Generated on: ${new Date().toLocaleString()}`, 50, footerY + 15, { align: 'center' });
+
+    doc.end();
+
+  } catch (err) {
+    console.error("Monthly statement error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+
+// ================= SAVED BANK ACCOUNTS ROUTES =================
+
+// Get saved bank accounts for vendor
+app.get("/api/admin/payouts/saved-accounts", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const vendorId = req.user.id;
+
+    // First, check if the table exists, if not create it
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vendor_bank_accounts (
+        id SERIAL PRIMARY KEY,
+        vendor_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        bank_details TEXT NOT NULL,
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    const result = await pool.query(
+      `SELECT * FROM vendor_bank_accounts WHERE vendor_id = $1 ORDER BY is_default DESC, created_at DESC`,
+      [vendorId]
+    );
+
+    res.json({ success: true, accounts: result.rows });
+  } catch (err) {
+    console.error("Error fetching saved accounts:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Save bank account for vendor
+app.post("/api/admin/payouts/save-account", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const vendorId = req.user.id;
+    const { bank_details } = req.body;
+
+    if (!bank_details || bank_details.trim() === "") {
+      return res.status(400).json({ success: false, message: "Bank details are required" });
+    }
+
+    // Create table if not exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vendor_bank_accounts (
+        id SERIAL PRIMARY KEY,
+        vendor_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        bank_details TEXT NOT NULL,
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Check if this exact bank detail already exists for this vendor
+    const existing = await pool.query(
+      `SELECT id FROM vendor_bank_accounts WHERE vendor_id = $1 AND bank_details = $2`,
+      [vendorId, bank_details]
+    );
+
+    if (existing.rows.length === 0) {
+      // Check if this is the first account - make it default
+      const countResult = await pool.query(
+        `SELECT COUNT(*) FROM vendor_bank_accounts WHERE vendor_id = $1`,
+        [vendorId]
+      );
+      const isFirstAccount = parseInt(countResult.rows[0].count) === 0;
+
+      await pool.query(
+        `INSERT INTO vendor_bank_accounts (vendor_id, bank_details, is_default) VALUES ($1, $2, $3)`,
+        [vendorId, bank_details, isFirstAccount]
+      );
+    }
+
+    res.json({ success: true, message: "Bank account saved successfully" });
+  } catch (err) {
+    console.error("Error saving bank account:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Delete saved bank account
+app.delete("/api/admin/payouts/saved-account/:id", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const vendorId = req.user.id;
+    const accountId = req.params.id;
+
+    const result = await pool.query(
+      `DELETE FROM vendor_bank_accounts WHERE id = $1 AND vendor_id = $2 RETURNING *`,
+      [accountId, vendorId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Account not found" });
+    }
+
+    res.json({ success: true, message: "Bank account deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting bank account:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Set default bank account
+app.put("/api/admin/payouts/saved-account/:id/default", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const vendorId = req.user.id;
+    const accountId = req.params.id;
+
+    await client.query("BEGIN");
+
+    // Remove default from all accounts
+    await client.query(
+      `UPDATE vendor_bank_accounts SET is_default = false WHERE vendor_id = $1`,
+      [vendorId]
+    );
+
+    // Set new default
+    await client.query(
+      `UPDATE vendor_bank_accounts SET is_default = true WHERE id = $1 AND vendor_id = $2`,
+      [accountId, vendorId]
+    );
+
+    await client.query("COMMIT");
+    res.json({ success: true, message: "Default account updated successfully" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error setting default account:", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ================= CANCEL & REJECT PAYOUT ROUTES =================
+
+// Cancel payout request (Vendor/Admin) - FIXED - Refund to balance
+app.put("/api/admin/payouts/:id/cancel", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const payoutId = req.params.id;
+    const vendorId = req.user.id;
+    const { reason } = req.body;
+
+    await client.query("BEGIN");
+
+    const payoutCheck = await client.query(
+      "SELECT * FROM payouts WHERE id = $1 AND vendor_id = $2 AND status = 'Pending'",
+      [payoutId, vendorId]
+    );
+
+    if (payoutCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Payout request not found or already processed" });
+    }
+
+    const payout = payoutCheck.rows[0];
+
+    await client.query(
+      "UPDATE users SET balance = balance + $1 WHERE id = $2",
+      [parseFloat(payout.amount), vendorId]
+    );
+
+    await client.query(
+      "UPDATE payouts SET status = 'Cancelled', cancellation_reason = $1, updated_at = NOW() WHERE id = $2",
+      [reason || "Cancelled by vendor", payoutId]
+    );
+
+    // Update wallet transaction status
+    await client.query(
+      `UPDATE wallet_transactions SET status = 'cancelled', description = description || ' - Cancelled' WHERE payout_id = $1`,
+      [payoutId]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ success: true, message: "Payout request cancelled and amount refunded" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Cancel payout error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+
+// Reject payout request (Super Admin only) - FIXED - Refund to balance
+app.put("/api/admin/payouts/:id/reject", verifyToken, verifySuperAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const payoutId = req.params.id;
+    const { reason } = req.body;
+
+    await client.query("BEGIN");
+
+    // Check if payout exists and is pending
+    const payoutCheck = await client.query(
+      "SELECT * FROM payouts WHERE id = $1 AND status = 'Pending'",
+      [payoutId]
+    );
+
+    if (payoutCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Payout request not found or already processed" });
+    }
+
+    const payout = payoutCheck.rows[0];
+
+    // REFUND the amount back to vendor's balance
+    await client.query(
+      "UPDATE users SET balance = balance + $1 WHERE id = $2",
+      [parseFloat(payout.amount), payout.vendor_id]
+    );
+
+    // Update payout status
+    await client.query(
+      "UPDATE payouts SET status = 'Rejected', rejection_reason = $1, updated_at = NOW(), processed_at = NOW() WHERE id = $2",
+      [reason || "Rejected by admin", payoutId]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ success: true, message: "Payout request rejected and amount refunded" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Reject payout error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/admin/wallet-transactions", verifyToken, verifyAdminVendorIndividualAccess, async (req, res) => {
+  try {
+    const userRole = req.user.role?.toLowerCase();
+    let query = `
+      SELECT wt.*, 
+             u.store_name, 
+             u.name as vendor_name
+      FROM wallet_transactions wt
+      JOIN users u ON wt.vendor_id = u.id
+      WHERE 1=1
+    `;
+    let params = [];
+
+    if (userRole !== 'super_admin') {
+      query += ` AND wt.vendor_id = $1`;
+      params.push(req.user.id);
+    }
+
+    query += ` ORDER BY wt.created_at DESC`;
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, transactions: result.rows });
+  } catch (err) {
+    console.error("Wallet transactions error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+app.get("/", (req, res) => res.send("Jayastra API is running 🚀"));
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {

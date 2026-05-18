@@ -11,7 +11,7 @@ const ShippingPolicy = () => {
         <section>
           <h2>1. Logistics Partner</h2>
           <p>
-            At <strong>Vastrudayam</strong>, we are committed to delivering your luxury sarees safely and on time. We have partnered with <strong>Shiprocket</strong>, India's leading logistics aggregator, to provide reliable nationwide shipping and real-time tracking.
+            At <strong>JAYASTRA</strong>, we are committed to delivering your luxury sarees safely and on time. We have partnered with <strong>Shiprocket</strong>, India's leading logistics aggregator, to provide reliable nationwide shipping and real-time tracking.
           </p>
         </section>
 

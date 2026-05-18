@@ -1,7 +1,6 @@
 // EditProduct.js
 import React, { useEffect, useState } from "react";
 import axios from "axios";
-import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import RichTextEditor from "./RichTextEditor";
 import "./AdminProducts.css";
@@ -17,9 +16,7 @@ const getImageUrl = (imagePath) => {
   return `${baseUrl}${cleanPath}`;
 };
 
-const EditProduct = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
+const EditProduct = ({ id, onClose }) => {
   const token = localStorage.getItem("token");
 
   const [dataLoading, setDataLoading] = useState(true);
@@ -35,8 +32,7 @@ const EditProduct = () => {
   const [productCodeAvailable, setProductCodeAvailable] = useState(true);
   const [productCodeChecking, setProductCodeChecking] = useState(false);
   const [productCodeMessage, setProductCodeMessage] = useState("");
-  const [isProductCodeManuallyEdited, setIsProductCodeManuallyEdited] =
-    useState(false);
+  const [isProductCodeManuallyEdited, setIsProductCodeManuallyEdited] = useState(false);
   const [suggestingCode, setSuggestingCode] = useState(false);
 
   const [product, setProduct] = useState({
@@ -84,8 +80,6 @@ const EditProduct = () => {
       }
     };
     fetchGlobalFee();
-    fetchCategories();
-    fetchNextPID();
   }, []);
 
   useEffect(() => {
@@ -98,7 +92,9 @@ const EditProduct = () => {
   }, [product.name, isSkuManuallyEdited]);
 
   useEffect(() => {
-    loadData();
+    if (id) {
+      loadData();
+    }
   }, [id]);
 
   const loadData = async () => {
@@ -128,7 +124,7 @@ const EditProduct = () => {
     } catch (err) {
       console.error("Load error:", err);
       toast.error(err.response?.data?.message || "Failed to load product data");
-      if (err.response?.status === 403) navigate("/admin/products");
+      if (err.response?.status === 403) onClose();
     } finally {
       setDataLoading(false);
     }
@@ -333,7 +329,7 @@ const EditProduct = () => {
         });
       }
       toast.success("Product updated successfully");
-      navigate("/admin/products");
+      onClose(); // Close modal and refresh data
     } catch (err) {
       console.error("Update error:", err);
       toast.error(err.response?.data?.message || "Update failed");
@@ -344,10 +340,8 @@ const EditProduct = () => {
 
   if (dataLoading) {
     return (
-      <div className="dash-loader-overlay">
-        <div className="dash-loader-container">
-          <div className="dash-spinner"></div>
-        </div>
+      <div className="dash-loader-container" style={{ minHeight: "400px" }}>
+        <div className="dash-spinner"></div>
       </div>
     );
   }
@@ -364,8 +358,8 @@ const EditProduct = () => {
     <div className="edit-product-container">
       <div className="form-header">
         <h2 className="page-title">Edit Product</h2>
-        <button className="back-btn" onClick={() => navigate("/admin/products")}>
-          ← Back
+        <button type="button" className="back-btn" onClick={onClose}>
+          ✕ Cancel
         </button>
       </div>
 

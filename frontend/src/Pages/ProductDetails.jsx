@@ -495,7 +495,7 @@ const ProductDetails = () => {
     const discountText = product.old_price && product.old_price > product.price
       ? `🔥 ${Math.round(((product.old_price - product.price) / product.old_price) * 100)}% OFF! `
       : '';
-    const shareText = `✨ ${product.name} ✨\n💰 Price: ₹${product.price} ${discountText}\n⭐ Rated ${avgRating.toFixed(1)} by ${totalReviews} customers.\n🛍️ Shop now at Vastrudayam – Premium Handloom Sarees.`;
+    const shareText = `✨ ${product.name} ✨\n💰 Price: ₹${product.price} ${discountText}\n⭐ Rated ${avgRating.toFixed(1)} by ${totalReviews} customers.\n🛍️ Shop now at JAYASTRA – Premium Handloom Sarees.`;
     const shareData = { title: product.name, text: shareText, url: window.location.href };
 
     if (navigator.share) {
@@ -694,30 +694,6 @@ const ProductDetails = () => {
               </div>
 
               <p className="shipping-text"><i className="bi bi-truck"></i> Free Shipping Across India</p>
-
-              <div className="pincode-checker-box">
-                <h5><i className="bi bi-geo-alt"></i> Check Delivery Time</h5>
-                <div className="pincode-input-group">
-                  <input
-                    type="text"
-                    placeholder="Enter Delivery Pincode"
-                    maxLength="6"
-                    value={pincode}
-                    onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))}
-                  />
-                  <button onClick={checkPincode} disabled={pinLoading}>{pinLoading ? "..." : "Check"}</button>
-                </div>
-                {pinResponse && (
-                  <div className={`pincode-result ${pinResponse.serviceable ? "success" : "error"}`}>
-                    {pinResponse.serviceable ? (
-                      <><i className="bi bi-check-circle-fill"></i> Delivery in {pinResponse.estimated_days} Days via {pinResponse.courier}</>
-                    ) : (
-                      <><i className="bi bi-x-circle-fill"></i> {pinResponse.message}</>
-                    )}
-                  </div>
-                )}
-              </div>
-
               {/* OFFERS / COUPONS DISPLAY */}
               <div className="offers-box">
                 {coupons.length === 0 ? (

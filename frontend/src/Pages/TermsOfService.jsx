@@ -10,7 +10,7 @@ const TermsOfService = () => {
 
         <section className="premium-policy-text">
           <p>
-            “By using our website, you agree to <strong>Vastrudayam’s</strong> terms and policies. All products, prices, and offers are subject to availability. We reserve the right to update or modify our policies at any time without prior notice.”
+            “By using our website, you agree to <strong>JAYASTRA</strong> terms and policies. All products, prices, and offers are subject to availability. We reserve the right to update or modify our policies at any time without prior notice.”
           </p>
         </section>
 
@@ -24,14 +24,14 @@ const TermsOfService = () => {
         <section>
           <h2>2. Product Availability & Pricing</h2>
           <p>
-            All products listed on the site are subject to availability. While we strive for accuracy, Vastrudayam reserves the right to correct any pricing errors or cancel orders if an item is out of stock.
+            All products listed on the site are subject to availability. While we strive for accuracy, JAYASTRA reserves the right to correct any pricing errors or cancel orders if an item is out of stock.
           </p>
         </section>
 
         <section>
           <h2>3. Intellectual Property</h2>
           <p>
-            All original photography, designs, and branding for our premium saree collections are the property of Vastrudayam. Unauthorized reproduction or use of these assets is strictly prohibited.
+            All original photography, designs, and branding for our premium saree collections are the property of JAYASTRA. Unauthorized reproduction or use of these assets is strictly prohibited.
           </p>
         </section>
 

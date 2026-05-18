@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { NavLink } from "react-router-dom";
 import "./Sidebar.css";
-import sarry_logo from "../assets/sarry_logo.png";
-import sarry_favicon from "../assets/vastrudayam_favicon.png";
+import sarry_logo from "../assets/jayastra_banner.png";
+import sarry_favicon from "../assets/jayastra-brown-favicon.png";
 
 export const SidebarContext = React.createContext();
 
@@ -20,10 +20,10 @@ const Sidebar = ({ isCollapsed, toggleSidebar }) => {
     { path: "/admin/stock-notifications", icon: "bi bi-bell", label: "Stock Notifications", roles: ["super_admin", "admin", "vendor"] },
     { path: "/admin/wishlist", icon: "bi bi-heart", label: "Wishlists", roles: ["super_admin", "admin", "vendor"] },
     { path: "/admin/returns", icon: "bi bi-arrow-return-left", label: "Returns / Verification", roles: ["super_admin", "admin", "vendor"] },
-    { path: "/admin/reviews", icon: "bi bi-chat-left-dots", label: "Customer Reviews", roles: ["super_admin", "admin", "vendor"] },
+    { path: "/admin/reviews", icon: "bi bi-chat-left-dots", label: "Customer Reviews", roles: ["super_admin"] },
     { path: "/admin/users", icon: "bi bi-people", label: "Vendors / Users", roles: ["super_admin", "admin", "vendor"] },
     { path: "/admin/coupons", icon: "bi bi-ticket-perforated", label: "Coupons", roles: ["super_admin", "admin", "vendor"] },
-    { path: "/admin/banners", icon: "bi bi-image", label: "Banners", roles: ["super_admin", "admin", "vendor"] },
+    { path: "/admin/banners", icon: "bi bi-image", label: "Banners", roles: ["super_admin"] },
     { path: "/admin/vendor-pickup", icon: "bi bi-building", label: "Shipping", roles: ["super_admin", "admin", "vendor"] },
     { path: "/admin/platform-fee", icon: "bi bi-percent", label: "Platform Fee", roles: ["super_admin"] },
     { path: "/admin/reports", icon: "bi bi-bar-chart", label: "Reports", roles: ["super_admin", "admin", "vendor"] },

@@ -10,7 +10,7 @@ const PrivacyPolicy = () => {
 
         <section className="premium-policy-text">
           <p>
-            “At <strong>Vastrudayam</strong>, your privacy is our priority. We ensure that all your personal information is securely protected and used only to enhance your shopping experience. Your details are never shared with third parties without your consent.”
+            “At <strong>JAYASTRA</strong>, your privacy is our priority. We ensure that all your personal information is securely protected and used only to enhance your shopping experience. Your details are never shared with third parties without your consent.”
           </p>
         </section>
 

@@ -1,13 +1,12 @@
-// components/LoadingSpinner.jsx
 import React from "react";
-import "./Loader.css";
+import "./LoadingSpinner.css"; // Updated import to match the CSS file name
 
 const LoadingSpinner = ({ fullPage = true }) => {
   return (
-   <div className={fullPage ? "loader-overlay" : "loader-container"}>
-      <div className="luxury-spinner">
-        <div className="spinner-circle"></div>
-        <div className="spinner-logo">V</div>
+    <div className={fullPage ? "load-init-overlay" : "load-init-container"}>
+      <div className="load-init-luxury-spinner">
+        <div className="load-init-spinner-circle"></div>
+        <div className="load-init-spinner-logo-text">J</div>
       </div>
     </div>
   );

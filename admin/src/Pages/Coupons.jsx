@@ -216,17 +216,17 @@ const Coupons = () => {
                 </div>
                 <div className="form-group">
                   <label>Discount Value *</label>
-                  <input type="number" name="discount_value" value={form.discount_value} onChange={handleChange} required />
+                  <input placeholder="10.00%" type="number" name="discount_value" value={form.discount_value} onChange={handleChange} required />
                 </div>
               </div>
               <div className="form-row">
                 <div className="form-group">
                   <label>Min Order Amount</label>
-                  <input type="number" name="min_order_amount" value={form.min_order_amount} onChange={handleChange} />
+                  <input placeholder="Rs. 1000" type="number" name="min_order_amount" value={form.min_order_amount} onChange={handleChange} />
                 </div>
                 <div className="form-group">
                   <label>Max Discount Cap</label>
-                  <input type="number" name="max_discount" value={form.max_discount} onChange={handleChange} />
+                  <input placeholder="Place 0 for empty" type="number" name="max_discount" value={form.max_discount} onChange={handleChange} />
                 </div>
               </div>
               <div className="form-group checkbox-wrap">

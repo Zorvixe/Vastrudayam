@@ -219,9 +219,9 @@ const Navbar = () => {
         {/* TOP BAR (unchanged) */}
         <div className="navbar-top-announcement">
           <div className="social-icons">
-            <a href="https://wa.me/919113657841" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}><i className="bi bi-whatsapp"></i></a>
-            <a href="tel:+919019397278" style={{ color: 'inherit', textDecoration: 'none' }}><i className="bi bi-telephone"></i></a>
-            <a href="https://www.instagram.com/vastrudayam?igsh=b293OXJ0aXh6Y24=" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}><i className="bi bi-instagram"></i></a>
+            <a href="https://wa.me/8328590444" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}><i className="bi bi-whatsapp"></i></a>
+            <a href="tel:+918328590444" style={{ color: 'inherit', textDecoration: 'none' }}><i className="bi bi-telephone"></i></a>
+            <a href="https://www.instagram.com/jayastra?igsh=b293OXJ0aXh6Y24=" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}><i className="bi bi-instagram"></i></a>
           </div>
           <div className="announcement-text-wrapper">
             {coupons.length > 0 ? (
@@ -304,7 +304,7 @@ const Navbar = () => {
 
             {/* Logo */}
             <div className="logo-box" onClick={() => navigate("/")}>
-              <img src="/assets/sarry-logo.png" alt="Logo" />
+              <img src="/assets/jayastra_banner.png" alt="Logo" className="jayastra-banner-nav" />
             </div>
 
             {/* Right Icons */}

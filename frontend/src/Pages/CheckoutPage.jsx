@@ -114,43 +114,97 @@ const CheckoutPage = () => {
     };
 
     // Apply coupon – send cart items with vendor_id to backend
+    // In CheckoutPage.jsx, update these functions:
+
+    // Handle apply coupon with proper discount calculation
     const handleApplyCoupon = async (coupon) => {
         setCouponMessage({ type: "", text: "" });
         try {
             const cartItemsForCoupon = cartItems.map(item => ({
                 product_id: item.product_id || item.id,
                 quantity: item.qty,
-                price: item.price,
-                vendor_id: item.vendor_id   // ✅ critical for vendor-specific coupons
+                price: parseFloat(item.price),
+                vendor_id: item.vendor_id
             }));
 
             const res = await axios.post(`${API_URL}/coupons/apply`, {
                 code: coupon.code,
-                totalAmount: totalPrice,
+                totalAmount: parseFloat(totalPrice),
                 cartItems: cartItemsForCoupon
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
             if (res.data.success) {
-                setSelectedCoupon(res.data.coupon);
-                setCouponDiscount(res.data.discount);
-                setCouponMessage({ type: "success", text: "Coupon applied successfully! ✨" });
+                const discountAmount = parseFloat(res.data.discount);
+                setSelectedCoupon({
+                    ...res.data.coupon,
+                    id: res.data.couponId || res.data.coupon.id
+                });
+                setCouponDiscount(discountAmount);
+                setCouponMessage({ type: "success", text: `Coupon applied! You saved ₹${discountAmount} ✨` });
+
+                // Close modal after successful application
                 setTimeout(() => {
                     setShowCouponModal(false);
                     setCouponMessage({ type: "", text: "" });
                 }, 1500);
             }
         } catch (err) {
+            console.error("Coupon apply error:", err);
             setCouponMessage({ type: "error", text: err.response?.data?.message || "Coupon ineligible" });
         }
     };
 
     // Manual coupon entry
     const handleManualCouponApply = async () => {
-        if (!manualCoupon.trim()) return;
-        const fakeCoupon = { code: manualCoupon.trim() };
+        if (!manualCoupon.trim()) {
+            setCouponMessage({ type: "error", text: "Please enter a coupon code" });
+            return;
+        }
+        const fakeCoupon = { code: manualCoupon.trim().toUpperCase() };
         await handleApplyCoupon(fakeCoupon);
+    };
+
+    // Get final amount after all discounts
+    const getFinalAmount = () => {
+        let total = parseFloat(totalPrice);
+        const couponDisc = parseFloat(couponDiscount);
+        if (!isNaN(couponDisc) && couponDisc > 0) {
+            total = total - couponDisc;
+        }
+        return Math.max(0, total);
+    };
+
+    // Update the proceed to payment function
+    const handleProceedToPayment = () => {
+        if (!selectedAddressId) {
+            showToast("Please select a delivery address", "error");
+            return;
+        }
+        const selectedAddress = addresses.find(a => a.id === selectedAddressId);
+
+        const fullAddress = selectedAddress.house_no
+            ? `${selectedAddress.house_no}, ${selectedAddress.street_area}, ${selectedAddress.city}`
+            : selectedAddress.address;
+
+        const finalAmount = getFinalAmount();
+
+        const orderData = {
+            customer_name: selectedAddress.name,
+            email: localStorage.getItem("userEmail") || "",
+            phone: selectedAddress.phone,
+            address: `${fullAddress}, ${selectedAddress.state} - ${selectedAddress.pincode}`,
+            house_no: selectedAddress.house_no || "",
+            street_area: selectedAddress.street_area || "",
+            landmark: selectedAddress.landmark || "",
+            total_amount: finalAmount,
+            discount: couponDiscount,
+            coupon_id: selectedCoupon?.id || null,
+            cartItems: cartItems
+        };
+
+        navigate("/payment", { state: { orderDetails: orderData } });
     };
 
     // USE CURRENT LOCATION (GPS)
@@ -222,30 +276,7 @@ const CheckoutPage = () => {
         }
     };
 
-    const handleProceedToPayment = () => {
-        if (!selectedAddressId) return showToast("Please select a delivery address", "error");
-        const selectedAddress = addresses.find(a => a.id === selectedAddressId);
-
-        // Auto-construct legacy address field for safety
-        const fullAddress = selectedAddress.house_no
-            ? `${selectedAddress.house_no}, ${selectedAddress.street_area}, ${selectedAddress.city}`
-            : selectedAddress.address;
-
-        const orderData = {
-            customer_name: selectedAddress.name,
-            email: localStorage.getItem("userEmail") || "",
-            phone: selectedAddress.phone,
-            address: `${fullAddress}, ${selectedAddress.state} - ${selectedAddress.pincode}`,
-            house_no: selectedAddress.house_no || "",
-            street_area: selectedAddress.street_area || "",
-            landmark: selectedAddress.landmark || "",
-            total_amount: finalAmount,
-            discount: couponDiscount,
-            coupon_id: selectedCoupon?.id || null,
-            cartItems: cartItems
-        };
-        navigate("/payment", { state: { orderDetails: orderData } });
-    };
+   
 
     const totalMRP = cartItems.reduce((acc, item) => acc + (Number(item.old_price || item.price) * item.qty), 0);
     const mrpDiscount = Number(totalMRP) - Number(totalPrice);

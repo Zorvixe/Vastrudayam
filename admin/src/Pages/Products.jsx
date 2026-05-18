@@ -2,8 +2,9 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import "./AdminProducts.css";
-import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
+import AddProduct from "./AddProduct";
+import EditProduct from "./EditProduct";
 
 const API_URL = process.env.REACT_APP_API_URL;
 
@@ -17,7 +18,6 @@ const getImageUrl = (imagePath) => {
 };
 
 const Products = () => {
-  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -26,6 +26,10 @@ const Products = () => {
   const [previewImage, setPreviewImage] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+
+  // Modal States
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editProductId, setEditProductId] = useState(null);
 
   const [pagination, setPagination] = useState({
     totalCount: 0,
@@ -78,26 +82,25 @@ const Products = () => {
   };
 
   const executeDeleteProduct = async () => {
-  if (!confirmDeleteId) return;
-  try {
-    const token = localStorage.getItem("token");
-    const res = await axios.delete(`${API_URL}/admin/products/${confirmDeleteId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    if (!confirmDeleteId) return;
+    try {
+      const token = localStorage.getItem("token");
+      const res = await axios.delete(`${API_URL}/admin/products/${confirmDeleteId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-    if (res.data.success) {
-      // Use the message returned from backend
-      toast.success(res.data.message);
-      fetchProducts(); // Refresh the list
-    } else {
-      toast.error(res.data.message || "Delete failed");
+      if (res.data.success) {
+        toast.success(res.data.message);
+        fetchProducts(); 
+      } else {
+        toast.error(res.data.message || "Delete failed");
+      }
+      setConfirmDeleteId(null);
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Delete failed");
+      setConfirmDeleteId(null);
     }
-    setConfirmDeleteId(null);
-  } catch (err) {
-    toast.error(err.response?.data?.message || "Delete failed");
-    setConfirmDeleteId(null);
-  }
-};
+  };
 
   const executeBulkDelete = async () => {
     try {
@@ -138,7 +141,7 @@ const Products = () => {
         <div className="actions-cluster">
           <button
             className="add-product-btn"
-            onClick={() => navigate("/admin/add-product")}
+            onClick={() => setShowAddModal(true)}
           >
             <i className="bi bi-plus-lg"></i> Add Product
           </button>
@@ -227,8 +230,9 @@ const Products = () => {
                     const stock = getStockStatus(product.stock_quantity);
                     const imageUrl = getImageUrl(product.main_image_url);
                     const feePercent = product.platform_fee_percent || 10;
-                    const perUnitNet = product.price * (1 - feePercent / 100);
-                    const totalPotential = perUnitNet * (product.stock_quantity || 0);
+                    const validPrice = Number(product.price) || 0;
+                    const perUnitNet = validPrice * (1 - feePercent / 100);
+                    const totalPotential = perUnitNet * (Number(product.stock_quantity) || 0);
                     return (
                       <tr key={product.id}>
                         <td>
@@ -294,9 +298,7 @@ const Products = () => {
                           <div className="actions">
                             <button
                               className="edit-btn"
-                              onClick={() =>
-                                navigate(`/admin/edit-product/${product.id}`)
-                              }
+                              onClick={() => setEditProductId(product.id)}
                               title="Edit"
                             >
                               <i className="bi bi-pencil"></i>
@@ -379,6 +381,7 @@ const Products = () => {
         )}
       </div>
 
+      {/* Lightbox for Images */}
       {previewImage && (
         <div
           className="admin-lightbox-overlay"
@@ -401,6 +404,7 @@ const Products = () => {
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
       {(confirmDeleteId || confirmBulkDelete) && (
         <div
           className="custom-confirm-overlay"
@@ -445,6 +449,35 @@ const Products = () => {
                 Yes, Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Product Modal Component Overlay */}
+      {showAddModal && (
+        <div className="product-modal-overlay" onClick={() => setShowAddModal(false)}>
+          <div className="product-modal-content" onClick={(e) => e.stopPropagation()}>
+            <AddProduct 
+              onClose={() => {
+                setShowAddModal(false);
+                fetchProducts();
+              }} 
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Edit Product Modal Component Overlay */}
+      {editProductId && (
+        <div className="product-modal-overlay" onClick={() => setEditProductId(null)}>
+          <div className="product-modal-content" onClick={(e) => e.stopPropagation()}>
+            <EditProduct 
+              id={editProductId} 
+              onClose={() => {
+                setEditProductId(null);
+                fetchProducts();
+              }} 
+            />
           </div>
         </div>
       )}

@@ -291,15 +291,14 @@ const OrderDetails = () => {
       <div className="invoice-print-layout">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #8E2139', paddingBottom: '30px', marginBottom: '30px' }}>
             <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-               <img src="/assets/Vastrudayam logo.png" alt="Vastrudayam" style={{ height: '80px', objectFit: 'contain' }} />
+               <img src="/assets/jayastra_banner.png" alt="JAYASTRA" style={{ height: '80px', objectFit: 'contain' }} />
                <div>
-                  <h1 style={{ margin: 0, fontSize: '28px', letterSpacing: '1px', color: '#8E2139', textTransform: 'uppercase', fontFamily: "'Playfair Display', serif" }}>VASTRUDAYAM</h1>
+                  <h1 style={{ margin: 0, fontSize: '28px', letterSpacing: '1px', color: '#8E2139', textTransform: 'uppercase', fontFamily: "'Playfair Display', serif" }}>JAYASTRA</h1>
                   <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#555', letterSpacing: '2px', fontWeight: '600' }}>PREMIUM ETHNIC WEAR</p>
                   <div style={{ marginTop: '10px', fontSize: '11px', color: '#444', lineHeight: '1.4' }}>
-                     <strong>Vastrudayam Retails</strong><br/>
-                     165/1, Priya Swaroop, 11th Cross, Modi Hospital Rd,<br/>
-                     Basaveshwar Nagar, Bengaluru, Karnataka 560079<br/>
-                     Email: vastrudayamofficial@gmail.com
+                     <strong>Jayastra Retails</strong><br/>
+                     1-125 Bheemavaram, Telangana<br/>
+                     Email: jayastrastore@gmail.com
                   </div>
                </div>
             </div>
@@ -377,7 +376,7 @@ const OrderDetails = () => {
         <div style={{ marginTop: '70px', paddingTop: '20px', borderTop: '1px solid #ddd', fontSize: '11px', color: '#666', textAlign: 'center', lineHeight: '1.6' }}>
            <p style={{ margin: '0 0 5px 0' }}><strong>Policy Note:</strong> Exchange requests must be submitted within 2 days of delivery of the saree., subject to our unboxing video verification protocol.</p>
            <p style={{ margin: 0 }}>This is a computer-generated tax invoice and does not require a physical signature.</p>
-           <strong style={{ display: 'block', marginTop: '12px', color: '#8E2139', letterSpacing: '0.5px' }}>THANK YOU FOR CHOOSING VASTRUDAYAM</strong>
+           <strong style={{ display: 'block', marginTop: '12px', color: '#8E2139', letterSpacing: '0.5px' }}>THANK YOU FOR CHOOSING JAYASTRA</strong>
         </div>
       </div>
 

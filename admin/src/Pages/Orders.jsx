@@ -204,7 +204,7 @@ const Orders = () => {
         <body>
           <div class="invoice-box">
             <div class="header">
-              <div class="logo">VASTRUDAYAM</div>
+              <div class="logo">JAYASTRA</div>
               <div class="title">Tax Invoice</div>
             </div>
 
@@ -255,7 +255,7 @@ const Orders = () => {
             </div>
 
             <div class="footer">
-              <p>Thank you for shopping with Vastrudayam!</p>
+              <p>Thank you for shopping with JAYASTRA!</p>
               <p>This is a computer generated invoice and does not require a physical signature.</p>
             </div>
           </div>

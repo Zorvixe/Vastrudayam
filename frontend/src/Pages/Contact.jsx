@@ -137,7 +137,7 @@ const Contact = () => {
                     </div>
                     <div className="info-text">
                       <h4>Call Us</h4>
-                      <p>+91 9019397278</p>
+                      <p>+91 8328590444</p>
                     </div>
                   </div>
 
@@ -147,7 +147,7 @@ const Contact = () => {
                     </div>
                     <div className="info-text">
                       <h4>Email Support</h4>
-                      <p>vastrudayamofficial@gmail.com</p>
+                      <p>jayastrastore@gmail.com</p>
                     </div>
                   </div>
 
@@ -166,9 +166,9 @@ const Contact = () => {
                 <div className="mt-5">
                   <h4 className="mb-3">Follow Us</h4>
                   <div className="social-box d-flex gap-3">
-                    <a href="tel:+919652648697" className="social-link ph text-primary"><i className="bi bi-telephone"></i></a>
-                    <a href="https://wa.me/919652648697" target="_blank" rel="noopener noreferrer" className="social-link wa text-success"><i className="bi bi-whatsapp"></i></a>
-                    <a href="https://instagram.com" target="_blank" rel="noopener noreferrer" className="social-link ig text-danger"><i className="bi bi-instagram"></i></a>
+                    <a href="tel:+918328590444" className="social-link ph text-primary"><i className="bi bi-telephone"></i></a>
+                    <a href="https://wa.me/918328590444" target="_blank" rel="noopener noreferrer" className="social-link wa text-success"><i className="bi bi-whatsapp"></i></a>
+                    <a href="https://instagram.com/jayastra" target="_blank" rel="noopener noreferrer" className="social-link ig text-danger"><i className="bi bi-instagram"></i></a>
                   </div>
                 </div>
               </div>

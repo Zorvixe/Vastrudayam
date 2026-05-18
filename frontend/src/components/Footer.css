@@ -23,7 +23,6 @@
 }
 
 .footer-brand-logo {
-  height: 190px; /* Noticeably increased logo height */
   width: auto;
   max-width: 100%;
   object-fit: contain;

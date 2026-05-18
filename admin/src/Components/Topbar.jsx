@@ -48,7 +48,7 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
         console.error("Failed to fetch profile:", error);
         // Fallback to localStorage or default values
         setAdminName(localStorage.getItem("admin_name") || "Admin");
-        setAdminEmail(localStorage.getItem("admin_email") || "admin@vastrudayam.com");
+        setAdminEmail(localStorage.getItem("admin_email") || "admin@Jayastra.com");
       } finally {
         setLoadingProfile(false);
       }
@@ -133,7 +133,7 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
         <button className="toggle-btn" onClick={toggleSidebar}>
           <i className={`bi ${isSidebarCollapsed ? 'bi-chevron-right' : 'bi-list'}`}></i>
         </button>
-        <h1 className="page-title">Vastrudayam</h1>
+        <h1 className="page-title">Jayastra</h1>
       </div>
 
       <div className="topbar-right">

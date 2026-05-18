@@ -1,15 +1,13 @@
 // AddProduct.js
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { useNavigate } from "react-router-dom";
 import "./AdminProducts.css";
 import { toast } from "react-toastify";
 import RichTextEditor from "./RichTextEditor";
 
 const API_URL = process.env.REACT_APP_API_URL;
 
-const AddProduct = () => {
-  const navigate = useNavigate();
+const AddProduct = ({ onClose }) => {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(false);
   const [description, setDescription] = useState("");
@@ -53,7 +51,6 @@ const AddProduct = () => {
   const [suggestingSku, setSuggestingSku] = useState(false);
   const [suggestingCode, setSuggestingCode] = useState(false);
 
-
   useEffect(() => {
     const fetchGlobalFee = async () => {
       try {
@@ -89,11 +86,11 @@ const AddProduct = () => {
       if (res.data.success && res.data.nextId) {
         setProduct((prev) => ({ ...prev, product_code: res.data.nextId }));
       } else {
-        setProduct((prev) => ({ ...prev, product_code: "VAS-001" }));
+        setProduct((prev) => ({ ...prev, product_code: "JAYA-001" }));
       }
     } catch (err) {
       console.error("PID fetch error", err);
-      setProduct((prev) => ({ ...prev, product_code: "VAS-001" }));
+      setProduct((prev) => ({ ...prev, product_code: "JAYA-001" }));
     }
   };
 
@@ -145,11 +142,6 @@ const AddProduct = () => {
       setSuggestingCode(false);
     }
   };
-
-  useEffect(() => {
-    fetchCategories();
-    fetchNextPID();
-  }, []);
 
   const fetchCategories = async () => {
     try {
@@ -317,7 +309,7 @@ const AddProduct = () => {
       }
 
       toast.success("Product added successfully");
-      navigate("/admin/products");
+      onClose(); // Close modal and refresh data
     } catch (err) {
       console.error("Product creation error:", err);
       toast.error(err.response?.data?.message || "Product creation failed");
@@ -394,8 +386,8 @@ const AddProduct = () => {
     <div className="add-product-container">
       <div className="form-header">
         <h2 className="page-title">Add New Product</h2>
-        <button className="back-btn" onClick={() => navigate("/admin/products")}>
-          ← Back
+        <button type="button" className="back-btn" onClick={onClose}>
+          ✕ Cancel
         </button>
       </div>
 
@@ -447,7 +439,7 @@ const AddProduct = () => {
                 <button
                   type="button"
                   className="btn-suggest"
-                  onClick={suggestUniqueSku}
+                  onClick={() => suggestUniqueSku(false)}
                   disabled={suggestingSku || !product.name}
                   title="Generate a unique SKU based on product name"
                 >

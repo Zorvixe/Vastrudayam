@@ -10,7 +10,7 @@ const ExchangePolicy = () => {
 
         <section className="premium-policy-text">
           <p>
-            “At <strong>Vastrudayam</strong>, we offer exchange options to ensure your satisfaction. Exchanges are accepted only if an unboxing video is recorded and shared. The product must be unused and in original condition. Requests without a proper opening video will not be accepted.”
+            “At <strong>JAYASTRA</strong>, we offer exchange options to ensure your satisfaction. Exchanges are accepted only if an unboxing video is recorded and shared. The product must be unused and in original condition. Requests without a proper opening video will not be accepted.”
           </p>
         </section>
 

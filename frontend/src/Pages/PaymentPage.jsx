@@ -11,7 +11,7 @@ const PaymentPage = () => {
     const location = useLocation();
     const navigate = useNavigate();
     const { clearCart } = useCart();
-    
+
     // Data passed from checkout
     const orderDetails = location.state?.orderDetails;
     const [isPlacingOrder, setIsPlacingOrder] = useState(false);
@@ -57,108 +57,21 @@ const PaymentPage = () => {
 
     const finalPayable = getAdjustedTotal();
 
-   // Add this function for better error handling
-const handleRazorpayPayment = async () => {
-    try {
-        setIsPlacingOrder(true);
-        const token = localStorage.getItem("token");
+    // Add this function for better error handling
+    // In PaymentPage.jsx, update the order placement:
 
-        // 1. Create Razorpay Order in Backend
-        const orderRes = await axios.post(`${API_URL}/razorpay/order`, {
-            amount: finalPayable
-        }, {
-            headers: { Authorization: `Bearer ${token}` }
-        });
-
-        if (!orderRes.data.success) {
-            throw new Error(orderRes.data.message || "Failed to create order");
-        }
-
-        const { order } = orderRes.data;
-
-        // 2. Open Razorpay Modal
-        const options = {
-            key: process.env.REACT_APP_RAZORPAY_KEY_ID,
-            amount: order.amount,
-            currency: order.currency,
-            name: "Vastrudayam",
-            description: `Purchase of Premium Products`,
-            order_id: order.id,
-            handler: async (response) => {
-                try {
-                    // Show loading state
-                    toast.info("Verifying payment...");
-                    
-                    // 3. Verify Payment and Save Order
-                    const verifyRes = await axios.post(`${API_URL}/razorpay/verify`, {
-                        razorpay_order_id: response.razorpay_order_id,
-                        razorpay_payment_id: response.razorpay_payment_id,
-                        razorpay_signature: response.razorpay_signature,
-                        orderDetails: {
-                            ...orderDetails,
-                            total_amount: finalPayable,
-                            payment_method: "RAZORPAY"
-                        }
-                    }, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-
-                    if (verifyRes.data.success) {
-                        setOrderId(verifyRes.data.orderId);
-                        setShowSuccessModal(true);
-                        clearCart();
-                        toast.success("Payment successful! Order placed.");
-                    } else {
-                        toast.error(verifyRes.data.message || "Payment verification failed");
-                    }
-                } catch (err) {
-                    console.error("Verification error:", err);
-                    toast.error(err.response?.data?.message || "Payment verification failed");
-                }
-            },
-            modal: {
-                ondismiss: () => {
-                    setIsPlacingOrder(false);
-                    toast.info("Payment cancelled");
-                },
-                escape: true,
-                backdropclose: false
-            },
-            prefill: {
-                name: orderDetails.customer_name,
-                email: orderDetails.email,
-                contact: orderDetails.phone
-            },
-            theme: {
-                color: "#8E2139"
-            }
-        };
-
-        const rzp = new window.Razorpay(options);
-        
-        rzp.on('payment.failed', function (response) {
-            console.error("Payment failed:", response.error);
-            toast.error(response.error.description || "Payment failed. Please try again.");
-            setIsPlacingOrder(false);
-        });
-        
-        rzp.open();
-
-    } catch (err) {
-        console.error("Razorpay error:", err);
-        toast.error(err.message || "Failed to initialize payment");
-        setIsPlacingOrder(false);
-    }
-};
     const handlePlaceOrder = async () => {
         if (paymentMethod === "COD") {
             setIsPlacingOrder(true);
             try {
+                // Ensure we're using the correct total amount with coupon discount already applied
                 const finalOrderData = {
                     ...orderDetails,
-                    total_amount: finalPayable,
+                    total_amount: parseFloat(orderDetails.total_amount), // This already has coupon discount applied from checkout
                     payment_method: paymentMethod
                 };
+
+                console.log("Placing COD order:", finalOrderData);
 
                 const res = await axios.post(`${API_URL}/orders`, finalOrderData, {
                     headers: { Authorization: `Bearer ${token}` }
@@ -170,12 +83,109 @@ const handleRazorpayPayment = async () => {
                     clearCart();
                 }
             } catch (err) {
+                console.error("Order error:", err);
                 toast.error(err.response?.data?.message || "Order placement failed");
             } finally {
                 setIsPlacingOrder(false);
             }
         } else {
             handleRazorpayPayment();
+        }
+    };
+
+    // Update Razorpay payment to use correct amount
+    const handleRazorpayPayment = async () => {
+        try {
+            setIsPlacingOrder(true);
+
+            // Use the final payable amount from orderDetails (already includes coupon discount)
+            const amountToPay = parseFloat(orderDetails.total_amount);
+
+            console.log("Razorpay payment amount:", amountToPay);
+
+            // 1. Create Razorpay Order in Backend
+            const orderRes = await axios.post(`${API_URL}/razorpay/order`, {
+                amount: amountToPay
+            }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (!orderRes.data.success) {
+                throw new Error(orderRes.data.message || "Failed to create order");
+            }
+
+            const { order } = orderRes.data;
+
+            // 2. Open Razorpay Modal
+            const options = {
+                key: process.env.REACT_APP_RAZORPAY_KEY_ID,
+                amount: order.amount,
+                currency: order.currency,
+                name: "JAYASTRA",
+                description: `Purchase of Premium Products`,
+                order_id: order.id,
+                handler: async (response) => {
+                    try {
+                        toast.info("Verifying payment...");
+
+                        const verifyRes = await axios.post(`${API_URL}/razorpay/verify`, {
+                            razorpay_order_id: response.razorpay_order_id,
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_signature: response.razorpay_signature,
+                            orderDetails: {
+                                ...orderDetails,
+                                total_amount: amountToPay,
+                                payment_method: "RAZORPAY"
+                            }
+                        }, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+
+                        if (verifyRes.data.success) {
+                            setOrderId(verifyRes.data.orderId);
+                            setShowSuccessModal(true);
+                            clearCart();
+                            toast.success("Payment successful! Order placed.");
+                        } else {
+                            toast.error(verifyRes.data.message || "Payment verification failed");
+                        }
+                    } catch (err) {
+                        console.error("Verification error:", err);
+                        toast.error(err.response?.data?.message || "Payment verification failed");
+                    } finally {
+                        setIsPlacingOrder(false);
+                    }
+                },
+                modal: {
+                    ondismiss: () => {
+                        setIsPlacingOrder(false);
+                        toast.info("Payment cancelled");
+                    }
+                },
+                prefill: {
+                    name: orderDetails.customer_name,
+                    email: orderDetails.email,
+                    contact: orderDetails.phone
+                },
+                theme: {
+                    color: "#8E2139"
+                }
+            };
+
+            const rzp = new window.Razorpay(options);
+
+            rzp.on('payment.failed', function (response) {
+                console.error("Payment failed:", response.error);
+                toast.error(response.error.description || "Payment failed. Please try again.");
+                setIsPlacingOrder(false);
+            });
+
+            rzp.open();
+
+        } catch (err) {
+            console.error("Razorpay error:", err);
+            toast.error(err.message || "Failed to initialize payment");
+            setIsPlacingOrder(false);
         }
     };
 
@@ -221,7 +231,7 @@ const handleRazorpayPayment = async () => {
 
                         <div className="payment-method-list">
                             {/* UPI */}
-                            <div 
+                            <div
                                 className={`method-item ${paymentMethod === 'UPI' ? 'selected' : ''}`}
                                 onClick={() => setPaymentMethod('UPI')}
                             >
@@ -238,7 +248,7 @@ const handleRazorpayPayment = async () => {
                                     )}
                                     {paymentMethod === 'UPI' && (
                                         <div className="payment-action-area d-none d-lg-block">
-                                            <button 
+                                            <button
                                                 className="btn-continue-checkout"
                                                 disabled={isPlacingOrder}
                                                 onClick={handlePlaceOrder}
@@ -251,7 +261,7 @@ const handleRazorpayPayment = async () => {
                             </div>
 
                             {/* Cards */}
-                            <div 
+                            <div
                                 className={`method-item ${paymentMethod === 'CARD' ? 'selected' : ''}`}
                                 onClick={() => setPaymentMethod('CARD')}
                             >
@@ -268,7 +278,7 @@ const handleRazorpayPayment = async () => {
                                     )}
                                     {paymentMethod === 'CARD' && (
                                         <div className="payment-action-area d-none d-lg-block">
-                                            <button 
+                                            <button
                                                 className="btn-continue-checkout"
                                                 disabled={isPlacingOrder}
                                                 onClick={handlePlaceOrder}
@@ -281,7 +291,7 @@ const handleRazorpayPayment = async () => {
                             </div>
 
                             {/* Net Banking */}
-                            <div 
+                            <div
                                 className={`method-item ${paymentMethod === 'NETBANKING' ? 'selected' : ''}`}
                                 onClick={() => setPaymentMethod('NETBANKING')}
                             >
@@ -298,7 +308,7 @@ const handleRazorpayPayment = async () => {
                                     )}
                                     {paymentMethod === 'NETBANKING' && (
                                         <div className="payment-action-area d-none d-lg-block">
-                                            <button 
+                                            <button
                                                 className="btn-continue-checkout"
                                                 disabled={isPlacingOrder}
                                                 onClick={handlePlaceOrder}
@@ -311,7 +321,7 @@ const handleRazorpayPayment = async () => {
                             </div>
 
                             {/* COD */}
-                            <div 
+                            <div
                                 className={`method-item ${paymentMethod === 'COD' ? 'selected' : ''}`}
                                 onClick={() => setPaymentMethod('COD')}
                             >
@@ -328,7 +338,7 @@ const handleRazorpayPayment = async () => {
                                     )}
                                     {paymentMethod === 'COD' && (
                                         <div className="payment-action-area d-none d-lg-block">
-                                            <button 
+                                            <button
                                                 className="btn-continue-checkout"
                                                 disabled={isPlacingOrder}
                                                 onClick={handlePlaceOrder}
@@ -356,7 +366,7 @@ const handleRazorpayPayment = async () => {
                                 <span>Coupon Discount</span>
                                 <span className="val">-₹{orderDetails.discount}</span>
                             </div>
-                            
+
                             {/* Payment specific adjustments */}
                             {paymentMethod === 'COD' ? (
                                 settings.cod_fee > 0 && (
@@ -384,7 +394,7 @@ const handleRazorpayPayment = async () => {
                                     <strong className="fs-5">₹{finalPayable}</strong>
                                 </div>
                             </div>
-                            
+
                             {paymentMethod !== 'COD' && settings.online_payment_discount > 0 ? (
                                 <div className="savings-hint text-success">
                                     Applied: Online Payment Discount ₹{settings.online_payment_discount}
@@ -407,8 +417,8 @@ const handleRazorpayPayment = async () => {
                     <span className="label">Amount Payable</span>
                     <span className="val">₹{finalPayable}</span>
                 </div>
-                <button 
-                    className="btn-footer-continue" 
+                <button
+                    className="btn-footer-continue"
                     onClick={handlePlaceOrder}
                     disabled={isPlacingOrder}
                 >
@@ -425,7 +435,7 @@ const handleRazorpayPayment = async () => {
                         </div>
                         <h2>Order Placed Successfully!</h2>
                         <p>Your order #{orderId} has been confirmed and will be delivered soon.</p>
-                        <button className="btn-orders-flip" onClick={() => navigate("/profile", { state: { activeTab: "orders" }})}>
+                        <button className="btn-orders-flip" onClick={() => navigate("/profile", { state: { activeTab: "orders" } })}>
                             Go to My Orders
                         </button>
                     </div>

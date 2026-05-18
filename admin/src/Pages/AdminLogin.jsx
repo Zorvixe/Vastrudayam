@@ -2,7 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import sarry_logo from "../assets/sarry_logo.png";
+import sarry_logo from "../assets/jayastra_banner.png";
 
 import "./AdminLogin.css";
 
