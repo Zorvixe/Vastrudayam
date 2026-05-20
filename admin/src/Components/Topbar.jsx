@@ -11,22 +11,57 @@ const SOCKET_URL = REACT_APP_API_URL.replace(/\/api\/?$/, "");
 const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
   const [openProfile, setOpenProfile] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
   const [notifications, setNotifications] = useState(() => {
     const saved = sessionStorage.getItem("admin_notifications");
     return saved ? JSON.parse(saved) : [];
   });
-  
+
   // State for user profile
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPhone, setAdminPhone] = useState("");
   const [loadingProfile, setLoadingProfile] = useState(true);
-  
+
+  // State for wallet balance
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [platformRevenue, setPlatformRevenue] = useState(0);
+  const [loadingBalance, setLoadingBalance] = useState(true);
+  const [userRole, setUserRole] = useState(null);
+  const [isMobile, setIsMobile] = useState(false);
+
   const navigate = useNavigate();
   const audioRef = useRef(null);
   const profileRef = useRef(null);
   const notificationRef = useRef(null);
   const token = localStorage.getItem("token");
+
+  const checkTokenAndRedirect = () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/admin/login', { replace: true });
+      return false;
+    }
+    return true;
+  };
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+
+
+  // Get user role from localStorage
+  useEffect(() => {
+    const role = localStorage.getItem("userRole");
+    setUserRole(role);
+  }, []);
 
   // Fetch user profile from backend
   useEffect(() => {
@@ -36,6 +71,8 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
     }
 
     const fetchProfile = async () => {
+      if (!checkTokenAndRedirect()) return;
+
       try {
         const res = await axios.get(`${REACT_APP_API_URL}/user/profile`, {
           headers: { Authorization: `Bearer ${token}` }
@@ -46,7 +83,6 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
         setAdminPhone(user.phone || "");
       } catch (error) {
         console.error("Failed to fetch profile:", error);
-        // Fallback to localStorage or default values
         setAdminName(localStorage.getItem("admin_name") || "Admin");
         setAdminEmail(localStorage.getItem("admin_email") || "admin@Jayastra.com");
       } finally {
@@ -56,6 +92,80 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
 
     fetchProfile();
   }, [token]);
+
+  // Fetch wallet balance for vendor/admin
+  const fetchWalletBalance = async () => {
+    if (!checkTokenAndRedirect()) return;
+
+    if (!token) return;
+
+    try {
+      setLoadingBalance(true);
+      const res = await axios.get(`${REACT_APP_API_URL}/admin/payouts`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data && typeof res.data.balance !== 'undefined') {
+        setWalletBalance(res.data.balance);
+      }
+    } catch (error) {
+      console.error("Failed to fetch wallet balance:", error);
+    } finally {
+      setLoadingBalance(false);
+    }
+  };
+
+  // Fetch platform revenue for super admin
+  const fetchPlatformRevenue = async () => {
+    if (!checkTokenAndRedirect()) return;
+
+    if (!token || userRole !== 'super_admin') return;
+
+    try {
+      setLoadingBalance(true);
+      const res = await axios.get(`${REACT_APP_API_URL}/admin/payouts`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data && res.data.payouts) {
+        const ordersRes = await axios.get(`${REACT_APP_API_URL}/admin/orders`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        let totalPlatformFee = 0;
+        if (ordersRes.data && ordersRes.data.orders) {
+          ordersRes.data.orders.forEach(order => {
+            if (order.items) {
+              order.items.forEach(item => {
+                const platformFeePercent = 10;
+                const itemTotal = parseFloat(item.price) * item.quantity;
+                const platformFee = itemTotal * (platformFeePercent / 100);
+                totalPlatformFee += platformFee;
+              });
+            }
+          });
+        }
+
+        setPlatformRevenue(totalPlatformFee);
+      }
+    } catch (error) {
+      console.error("Failed to fetch platform revenue:", error);
+    } finally {
+      setLoadingBalance(false);
+    }
+  };
+
+  // Fetch balance on mount and periodically
+  useEffect(() => {
+    if (userRole === 'super_admin') {
+      fetchPlatformRevenue();
+      const interval = setInterval(fetchPlatformRevenue, 30000);
+      return () => clearInterval(interval);
+    } else {
+      fetchWalletBalance();
+      const interval = setInterval(fetchWalletBalance, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [token, userRole]);
 
   // Socket.io for new order notifications
   useEffect(() => {
@@ -79,10 +189,16 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
       if (audioRef.current) {
         audioRef.current.play().catch(e => console.log("Audio play blocked", e));
       }
+
+      if (userRole === 'super_admin') {
+        fetchPlatformRevenue();
+      } else {
+        fetchWalletBalance();
+      }
     });
 
     return () => socket.disconnect();
-  }, []);
+  }, [token, userRole]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -103,6 +219,7 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
     localStorage.removeItem("token");
     localStorage.removeItem("admin_name");
     localStorage.removeItem("admin_email");
+    localStorage.removeItem("userRole");
     sessionStorage.removeItem("admin_notifications");
     navigate("/admin/login", { replace: true });
   };
@@ -125,6 +242,29 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
   // Display name or loading/fallback
   const displayName = loadingProfile ? "Loading..." : (adminName || "Admin");
 
+  // Format currency
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(amount || 0);
+  };
+
+  const showWalletBalance = userRole === 'vendor' || userRole === 'admin';
+  const showPlatformRevenue = userRole === 'super_admin';
+
+  // Handle wallet card click for mobile
+  const handleWalletClick = () => {
+    if (isMobile) {
+      setShowWalletModal(true);
+    }
+  };
+
+  // Get current balance value
+  const currentBalance = showPlatformRevenue ? platformRevenue : walletBalance;
+
   return (
     <div className={`admin-topbar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
       <audio ref={audioRef} src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto" />
@@ -135,6 +275,62 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
         </button>
         <h1 className="page-title">Jayastra</h1>
       </div>
+
+      {/* Center - Wallet Balance for Vendors/Admins */}
+      {showWalletBalance && (
+        <div className="topbar-center">
+          <div className="wallet-balance-card" onClick={handleWalletClick}>
+            <div className="wallet-icon">
+              <i className="bi bi-wallet2"></i>
+            </div>
+            <div className="wallet-info">
+              <span className="wallet-label">Wallet Balance</span>
+              <span className="wallet-amount">
+                {loadingBalance ? (
+                  <div className="mini-loader"></div>
+                ) : (
+                  formatCurrency(walletBalance)
+                )}
+              </span>
+            </div>
+            <button
+              className="wallet-refresh-btn"
+              onClick={(e) => { e.stopPropagation(); fetchWalletBalance(); }}
+              title="Refresh balance"
+            >
+              <i className="bi bi-arrow-repeat"></i>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Center - Platform Revenue for Super Admin */}
+      {showPlatformRevenue && (
+        <div className="topbar-center">
+          <div className="wallet-balance-card" onClick={handleWalletClick}>
+            <div className="wallet-icon">
+              <i className="bi bi-wallet2"></i>
+            </div>
+            <div className="wallet-info">
+              <span className="wallet-label">Platform Revenue</span>
+              <span className="wallet-amount">
+                {loadingBalance ? (
+                  <div className="mini-loader"></div>
+                ) : (
+                  formatCurrency(platformRevenue)
+                )}
+              </span>
+            </div>
+            <button
+              className="wallet-refresh-btn"
+              onClick={(e) => { e.stopPropagation(); fetchPlatformRevenue(); }}
+              title="Refresh revenue"
+            >
+              <i className="bi bi-arrow-repeat"></i>
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="topbar-right">
         {/* Notifications Dropdown */}
@@ -172,9 +368,9 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
                   </div>
                 ) : (
                   notifications.map((n) => (
-                    <div 
-                      key={n.id} 
-                      className={`notif-item ${n.unread ? 'unread' : ''}`} 
+                    <div
+                      key={n.id}
+                      className={`notif-item ${n.unread ? 'unread' : ''}`}
                       onClick={() => {
                         navigate('/admin/orders');
                         setShowNotifications(false);
@@ -226,9 +422,9 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
                   <div className="dropdown-user-email">{adminEmail}</div>
                 </div>
               </div>
-              
+
               <div className="dropdown-divider"></div>
-              
+
               <div className="dropdown-menu-items">
                 <div className="dropdown-item" onClick={() => {
                   navigate('/admin/profile');
@@ -237,7 +433,7 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
                   <i className="bi bi-person"></i>
                   <span>My Profile</span>
                 </div>
-                
+
                 <div className="dropdown-item" onClick={() => {
                   navigate('/admin/settings');
                   setOpenProfile(false);
@@ -245,7 +441,7 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
                   <i className="bi bi-gear"></i>
                   <span>Settings</span>
                 </div>
-                
+
                 <div className="dropdown-item" onClick={() => {
                   navigate('/admin/orders');
                   setOpenProfile(false);
@@ -253,10 +449,30 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
                   <i className="bi bi-box-seam"></i>
                   <span>My Orders</span>
                 </div>
+
+                {showWalletBalance && (
+                  <div className="dropdown-item" onClick={() => {
+                    navigate('/admin/payouts');
+                    setOpenProfile(false);
+                  }}>
+                    <i className="bi bi-wallet2"></i>
+                    <span>My Wallet</span>
+                  </div>
+                )}
+
+                {showPlatformRevenue && (
+                  <div className="dropdown-item" onClick={() => {
+                    navigate('/admin/payouts');
+                    setOpenProfile(false);
+                  }}>
+                    <i className="bi bi-graph-up"></i>
+                    <span>Platform Analytics</span>
+                  </div>
+                )}
               </div>
-              
+
               <div className="dropdown-divider"></div>
-              
+
               <div className="dropdown-item logout-item" onClick={handleLogout}>
                 <i className="bi bi-box-arrow-right"></i>
                 <span>Logout</span>
@@ -265,6 +481,47 @@ const Topbar = ({ toggleSidebar, isSidebarCollapsed }) => {
           )}
         </div>
       </div>
+
+      {/* Mobile Wallet Modal */}
+      {showWalletModal && (
+        <div className="mobile-wallet-modal-overlay" onClick={() => setShowWalletModal(false)}>
+          <div className="mobile-wallet-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-wallet-header">
+              <h3>Wallet Balance</h3>
+              <button className="mobile-wallet-close" onClick={() => setShowWalletModal(false)}>
+                <i className="bi bi-x-lg"></i>
+              </button>
+            </div>
+            <div className="mobile-wallet-body">
+              <div className="mobile-wallet-icon">
+                <i className="bi bi-wallet2"></i>
+              </div>
+              <div className="mobile-wallet-amount">
+                {loadingBalance ? (
+                  <div className="mini-loader"></div>
+                ) : (
+                  formatCurrency(currentBalance)
+                )}
+              </div>
+              <div className="mobile-wallet-label">
+                {showPlatformRevenue ? 'Platform Revenue' : 'Available Balance'}
+              </div>
+              <button
+                className="mobile-wallet-refresh"
+                onClick={() => {
+                  if (showPlatformRevenue) {
+                    fetchPlatformRevenue();
+                  } else {
+                    fetchWalletBalance();
+                  }
+                }}
+              >
+                <i className="bi bi-arrow-repeat"></i> Refresh
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

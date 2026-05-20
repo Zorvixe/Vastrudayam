@@ -27,6 +27,19 @@ import Wishlist from "./Pages/Wishlist";
 import VendorPickupAddresses from "./Pages/VendorPickupSettings/VendorPickupAddresses";
 import PlatformFeeSettings from "./Pages/PlatformFeeSettings/PlatformFeeSettings";
 
+
+// Protected Route Component
+const ProtectedRoute = ({ children }) => {
+  const token = localStorage.getItem("token");
+  const userRole = localStorage.getItem("userRole");
+
+  if (!token || !userRole) {
+    return <Navigate to="/admin/login" replace />;
+  }
+
+  return children;
+};
+
 function App() {
   return (
     <Router>
@@ -36,7 +49,9 @@ function App() {
         <Route
           path="/admin"
           element={
-            localStorage.getItem("token") && localStorage.getItem("userRole") ? <AdminLayout /> : <Navigate to="/admin/login" />
+            <ProtectedRoute>
+              <AdminLayout />
+            </ProtectedRoute>
           }
         >
           <Route path="dashboard" element={<Dashboard />} />

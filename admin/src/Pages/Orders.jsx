@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import axios from "axios";
+import axios from '../utils/axiosConfig'; // Adjust path as needed
 import { toast } from "react-toastify";
 import "./Order.css";
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import axios from "axios";
+import axios from '../../utils/axiosConfig'; // Adjust path as needed
 import { toast } from "react-toastify";
 
 const API_URL = process.env.REACT_APP_API_URL;
